@@ -11,7 +11,7 @@ import (
 )
 
 func TestPing(t *testing.T) {
-	handler := NewHandler()
+	handler := newTestHandler()
 	for _, target := range []string{"/ping", "/ping?check=1"} {
 		t.Run(target, func(t *testing.T) {
 			response := httptest.NewRecorder()
@@ -30,7 +30,7 @@ func TestPing(t *testing.T) {
 }
 
 func TestPingRejectsOtherMethods(t *testing.T) {
-	handler := NewHandler()
+	handler := newTestHandler()
 	for _, method := range []string{
 		http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete,
 		http.MethodHead, http.MethodOptions,
@@ -49,7 +49,7 @@ func TestPingRejectsOtherMethods(t *testing.T) {
 }
 
 func TestUnknownPaths(t *testing.T) {
-	handler := NewHandler()
+	handler := newTestHandler()
 	for _, path := range []string{"/", "/unknown", "/ping/", "/ping/extra", "/pingpong"} {
 		t.Run(path, func(t *testing.T) {
 			response := httptest.NewRecorder()
@@ -68,7 +68,7 @@ func TestPingLogsWriteFailureWithoutRetry(t *testing.T) {
 	t.Cleanup(func() { log.SetOutput(previousOutput) })
 
 	response := &failingResponseWriter{header: make(http.Header)}
-	NewHandler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ping", nil))
+	newTestHandler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ping", nil))
 	if response.writes != 1 || response.headers != 1 {
 		t.Errorf("response writes = %d, header writes = %d; want one each", response.writes, response.headers)
 	}

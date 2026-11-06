@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/skitchen1992/Ledger/ledger"
-	"github.com/skitchen1992/Ledger/ledger/internal/store"
+	"github.com/skitchen1992/Ledger/ledger/service"
 )
 
 func TestRoutingUsesJSONAndMethodAllow(t *testing.T) {
@@ -54,8 +54,8 @@ func TestInvalidRequestsAreRejectedBeforeStorage(t *testing.T) {
 		} {
 			t.Run(path+" "+body, func(t *testing.T) {
 				response := httptest.NewRecorder()
-				// A nil store makes an accidental persistence call fail this test.
-				NewHandler(nil).ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+				// Real service validation must reject input before touching nil repositories.
+				NewHandler(service.NewReporting(service.NewStrict(nil, nil, nil), nil, nil)).ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
 				if response.Code != http.StatusBadRequest {
 					t.Fatalf("response = %d %s, want 400", response.Code, response.Body)
 				}
@@ -83,8 +83,8 @@ func TestPersistenceValidationReturnsBadRequest(t *testing.T) {
 	} {
 		t.Run(tc.path+tc.body, func(t *testing.T) {
 			response := httptest.NewRecorder()
-			// Real Store validation must reject input before using its nil DB.
-			NewHandler(store.New(nil, nil)).ServeHTTP(response,
+			// Real service validation must reject input before using its nil repositories.
+			NewHandler(service.NewReporting(service.NewStrict(nil, nil, nil), nil, nil)).ServeHTTP(response,
 				httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body)))
 			if response.Code != http.StatusBadRequest {
 				t.Fatalf("response = %d %s, want 400", response.Code, response.Body)
@@ -124,12 +124,12 @@ func TestStoreErrorsMapToHTTPStatuses(t *testing.T) {
 		body   string
 	}{
 		{"budget exceeded", fmt.Errorf("food: %w", ledger.ErrBudgetExceeded), http.StatusConflict, `{"error":"budget exceeded"}`},
-		{"invalid input", fmt.Errorf("%w: date must be YYYY-MM-DD", store.ErrInvalidInput), http.StatusBadRequest, ""},
+		{"invalid input", fmt.Errorf("%w: date must be YYYY-MM-DD", service.ErrInvalidInput), http.StatusBadRequest, ""},
 		{"database failure", errors.New("database connection password=private"), http.StatusInternalServerError, `{"error":"internal server error"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			response := httptest.NewRecorder()
-			writeStoreError(response, httptest.NewRequest(http.MethodPost, "/api/transactions", nil), tc.err)
+			writeServiceError(response, httptest.NewRequest(http.MethodPost, "/api/transactions", nil), tc.err)
 			if response.Code != tc.status {
 				t.Fatalf("status = %d, want %d", response.Code, tc.status)
 			}

@@ -1,6 +1,6 @@
 package api
 
-import "github.com/skitchen1992/Ledger/ledger"
+import "github.com/skitchen1992/Ledger/ledger/service"
 
 // CreateTransactionRequest содержит клиентские поля расхода; ID назначает Ledger.
 type CreateTransactionRequest struct {
@@ -31,22 +31,22 @@ type BudgetResponse struct {
 	Limit    float64 `json:"limit"`
 }
 
-func (r CreateTransactionRequest) toTransaction() ledger.Transaction {
-	return ledger.Transaction{
+func (r CreateTransactionRequest) toTransaction() service.Transaction {
+	return service.Transaction{
 		Amount: r.Amount, Category: r.Category, Description: r.Description, Date: r.Date,
 	}
 }
 
-func transactionResponse(tx ledger.Transaction) TransactionResponse {
+func transactionResponse(tx service.Transaction) TransactionResponse {
 	return TransactionResponse{
 		ID: tx.ID, Amount: tx.Amount, Category: tx.Category, Description: tx.Description, Date: tx.Date,
 	}
 }
 
-func (r CreateBudgetRequest) toBudget() ledger.Budget {
-	return ledger.Budget{Category: r.Category, Limit: r.Limit}
+func (r CreateBudgetRequest) toBudget() service.Budget {
+	return service.Budget{Category: r.Category, Limit: r.Limit}
 }
 
-func budgetResponse(b ledger.Budget) BudgetResponse {
+func budgetResponse(b service.Budget) BudgetResponse {
 	return BudgetResponse{Category: b.Category, Limit: b.Limit}
 }

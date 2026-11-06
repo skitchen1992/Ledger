@@ -3,20 +3,17 @@ package api
 import (
 	"errors"
 	"net/http"
-	"sync"
 
-	"github.com/skitchen1992/Ledger/ledger"
+	"github.com/skitchen1992/Ledger/ledger/service"
 )
 
 type handler struct {
-	mu     sync.RWMutex
-	ledger ledger.Ledger
+	service service.Service
 }
 
-// NewHandler создаёт маршруты и отдельное пустое хранилище в памяти.
-// Все обращения к Ledger защищены одним mutex, включая чтение назначенного ID.
-func NewHandler() http.Handler {
-	return loggingMiddleware(&handler{})
+// NewHandler создаёт HTTP-маршруты над готовым сервисом Ledger.
+func NewHandler(s service.Service) http.Handler {
+	return loggingMiddleware(&handler{service: s})
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -61,36 +58,20 @@ func (h *handler) createTransaction(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, r, err)
 		return
 	}
-	tx := request.toTransaction()
-	if err := tx.Validate(); err != nil {
-		writeError(w, r, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	h.mu.Lock()
-	err := h.ledger.AddTransaction(tx)
-	if err == nil {
-		// AddTransaction принимает значение. Читаем сохранённую запись с ID
-		// под той же блокировкой, чтобы другой запрос не заменил последний элемент.
-		transactions := h.ledger.ListTransactions()
-		tx = transactions[len(transactions)-1]
-	}
-	h.mu.Unlock()
-	if errors.Is(err, ledger.ErrBudgetExceeded) {
-		writeError(w, r, http.StatusConflict, "budget exceeded")
-		return
-	}
+	tx, err := h.service.CreateTransaction(r.Context(), request.toTransaction())
 	if err != nil {
-		writeInternalError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, r, http.StatusCreated, transactionResponse(tx))
 }
 
 func (h *handler) listTransactions(w http.ResponseWriter, r *http.Request) {
-	h.mu.RLock()
-	transactions := h.ledger.ListTransactions()
-	h.mu.RUnlock()
+	transactions, err := h.service.ListTransactions(r.Context())
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
 	response := make([]TransactionResponse, 0, len(transactions))
 	for _, tx := range transactions {
 		response = append(response, transactionResponse(tx))
@@ -105,28 +86,33 @@ func (h *handler) createBudget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b := request.toBudget()
-	if err := b.Validate(); err != nil {
-		writeError(w, r, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	h.mu.Lock()
-	err := h.ledger.SetBudget(b)
-	h.mu.Unlock()
-	if err != nil {
-		writeInternalError(w, r, err)
+	if err := h.service.SetBudget(r.Context(), b); err != nil {
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, r, http.StatusCreated, budgetResponse(b))
 }
 
 func (h *handler) listBudgets(w http.ResponseWriter, r *http.Request) {
-	h.mu.RLock()
-	budgets := h.ledger.ListBudgets()
-	h.mu.RUnlock()
+	budgets, err := h.service.ListBudgets(r.Context())
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
 	response := make([]BudgetResponse, 0, len(budgets))
 	for _, b := range budgets {
 		response = append(response, budgetResponse(b))
 	}
 	writeJSON(w, r, http.StatusOK, response)
+}
+
+func writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, service.ErrBudgetExceeded):
+		writeError(w, r, http.StatusConflict, "budget exceeded")
+	case errors.Is(err, service.ErrInvalidInput):
+		writeError(w, r, http.StatusBadRequest, err.Error())
+	default:
+		writeInternalError(w, r, err)
+	}
 }

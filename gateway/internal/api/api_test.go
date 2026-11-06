@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/skitchen1992/Ledger/ledger/service"
 )
 
 type transactionJSON struct {
@@ -30,7 +32,7 @@ type budgetJSON struct {
 }
 
 func TestEmptyCollectionsAndIndependentHandlers(t *testing.T) {
-	first := NewHandler()
+	first := newTestHandler()
 	for _, path := range []string{"/api/transactions", "/api/budgets"} {
 		response := request(t, first, http.MethodGet, path, "", http.StatusOK)
 		if got := strings.TrimSpace(response.Body.String()); got != "[]" {
@@ -40,7 +42,7 @@ func TestEmptyCollectionsAndIndependentHandlers(t *testing.T) {
 	request(t, first, http.MethodPost, "/api/budgets", `{"category":"еда","limit":1}`, http.StatusCreated)
 	request(t, first, http.MethodPost, "/api/transactions", `{"category":"еда","amount":1}`, http.StatusCreated)
 
-	second := NewHandler()
+	second := newTestHandler()
 	for _, path := range []string{"/api/transactions", "/api/budgets"} {
 		response := request(t, second, http.MethodGet, path, "", http.StatusOK)
 		if got := strings.TrimSpace(response.Body.String()); got != "[]" {
@@ -78,8 +80,8 @@ func TestTransactionsAPI(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// NewHandler owns a fresh Ledger, so each HTTP scenario is isolated.
-			handler := NewHandler()
+			// Each HTTP scenario uses the real service over isolated test repositories.
+			handler := newTestHandler()
 			budget := budgetJSON{Category: "еда", Limit: 5000}
 			response := request(t, handler, http.MethodPost, "/api/budgets", `{"category":"еда","limit":5000}`, http.StatusCreated)
 			if got := decodeResponse[budgetJSON](t, response); got != budget {
@@ -139,7 +141,7 @@ func TestInvalidTransactionsLeaveHistoryAndNextIDUnchanged(t *testing.T) {
 		{name: "trailing garbage", body: `{"amount":10,"category":"еда"} !`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			handler := NewHandler()
+			handler := newTestHandler()
 			request(t, handler, http.MethodPost, "/api/transactions", `{"amount":5,"category":"книги"}`, http.StatusCreated)
 			response := request(t, handler, http.MethodPost, "/api/transactions", tc.body, http.StatusBadRequest)
 			assertJSONError(t, response, "")
@@ -157,7 +159,7 @@ func TestInvalidTransactionsLeaveHistoryAndNextIDUnchanged(t *testing.T) {
 }
 
 func TestBudgetUpdatesPreserveHistoryAndCumulativeSpending(t *testing.T) {
-	handler := NewHandler()
+	handler := newTestHandler()
 	request(t, handler, http.MethodPost, "/api/transactions", `{"amount":60,"category":"еда"}`, http.StatusCreated)
 	for _, tc := range []struct {
 		body   string
@@ -211,7 +213,7 @@ func TestBudgetUpdatesPreserveHistoryAndCumulativeSpending(t *testing.T) {
 }
 
 func TestFractionalBudgetAllowsExactLimitAndRejectsExcess(t *testing.T) {
-	handler := NewHandler()
+	handler := newTestHandler()
 	request(t, handler, http.MethodPost, "/api/budgets", `{"category":"еда","limit":0.3}`, http.StatusCreated)
 	request(t, handler, http.MethodPost, "/api/transactions", `{"category":"еда","amount":0.1}`, http.StatusCreated)
 	request(t, handler, http.MethodPost, "/api/transactions", `{"category":"еда","amount":0.2}`, http.StatusCreated)
@@ -221,6 +223,62 @@ func TestFractionalBudgetAllowsExactLimitAndRejectsExcess(t *testing.T) {
 	want := []transactionJSON{{ID: 1, Category: "еда", Amount: 0.1}, {ID: 2, Category: "еда", Amount: 0.2}}
 	if got := decodeResponse[[]transactionJSON](t, response); !reflect.DeepEqual(got, want) {
 		t.Errorf("history = %+v, want %+v", got, want)
+	}
+}
+
+func TestGatewayPreservesOptionalDatesAndArbitraryPrecision(t *testing.T) {
+	handler := newTestHandler()
+	request(t, handler, http.MethodPost, "/api/budgets", `{"category":"еда","limit":0.00003}`, http.StatusCreated)
+	want := []transactionJSON{
+		{ID: 1, Category: "еда", Amount: 0.00001},
+		{ID: 2, Category: "еда", Amount: 0.00002, Date: "произвольная дата"},
+		{ID: 3, Category: "книги", Amount: 1000000000000, Date: "2020-01-01"},
+	}
+	for _, tx := range want {
+		body, err := json.Marshal(tx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := request(t, handler, http.MethodPost, "/api/transactions", string(body), http.StatusCreated)
+		assertTransactionResponse(t, response, tx)
+	}
+	response := request(t, handler, http.MethodPost, "/api/transactions", `{"category":"еда","amount":0.000001}`, http.StatusConflict)
+	assertJSONError(t, response, "budget exceeded")
+	response = request(t, handler, http.MethodGet, "/api/transactions", "", http.StatusOK)
+	if got := decodeResponse[[]transactionJSON](t, response); !reflect.DeepEqual(got, want) {
+		t.Errorf("history = %+v, want insertion order and unchanged values %+v", got, want)
+	}
+}
+
+func TestRepositoryFailuresReturnGeneric500AndPreserveState(t *testing.T) {
+	for _, tc := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodGet, path: "/api/budgets"},
+		{method: http.MethodGet, path: "/api/transactions"},
+		{method: http.MethodPost, path: "/api/budgets", body: `{"category":"еда","limit":100}`},
+		{method: http.MethodPost, path: "/api/transactions", body: `{"category":"еда","amount":1}`},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			repository := newMemoryRepository()
+			handler := NewHandler(service.New(repository, repository, repository))
+			request(t, handler, http.MethodPost, "/api/budgets", `{"category":"еда","limit":10}`, http.StatusCreated)
+			request(t, handler, http.MethodPost, "/api/transactions", `{"category":"еда","amount":4}`, http.StatusCreated)
+			repository.state.err = errors.New("database unavailable")
+			response := request(t, handler, tc.method, tc.path, tc.body, http.StatusInternalServerError)
+			assertJSONError(t, response, "internal server error")
+			repository.state.err = nil
+			response = request(t, handler, http.MethodGet, "/api/budgets", "", http.StatusOK)
+			if got, want := decodeResponse[[]budgetJSON](t, response), []budgetJSON{{Category: "еда", Limit: 10}}; !reflect.DeepEqual(got, want) {
+				t.Errorf("failed operation changed budgets: got %+v, want %+v", got, want)
+			}
+			response = request(t, handler, http.MethodGet, "/api/transactions", "", http.StatusOK)
+			if got, want := decodeResponse[[]transactionJSON](t, response), []transactionJSON{{ID: 1, Category: "еда", Amount: 4}}; !reflect.DeepEqual(got, want) {
+				t.Errorf("failed operation changed history: got %+v, want %+v", got, want)
+			}
+		})
 	}
 }
 
@@ -247,7 +305,7 @@ func TestInvalidBudgetsPreserveBudgetAndHistory(t *testing.T) {
 		{name: "trailing garbage", body: `{"category":"еда","limit":100} !`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			handler := NewHandler()
+			handler := newTestHandler()
 			request(t, handler, http.MethodPost, "/api/budgets", `{"category":"еда","limit":10}`, http.StatusCreated)
 			request(t, handler, http.MethodPost, "/api/transactions", `{"category":"еда","amount":4}`, http.StatusCreated)
 			response := request(t, handler, http.MethodPost, "/api/budgets", tc.body, http.StatusBadRequest)
@@ -269,7 +327,7 @@ func TestInvalidBudgetsPreserveBudgetAndHistory(t *testing.T) {
 }
 
 func TestRoutingErrorsUseJSON(t *testing.T) {
-	handler := NewHandler()
+	handler := newTestHandler()
 	for _, path := range []string{"/", "/api", "/api/unknown", "/api/transactions/", "/api/budgets/extra"} {
 		t.Run(path, func(t *testing.T) {
 			assertJSONError(t, request(t, handler, http.MethodGet, path, "", http.StatusNotFound), "")
@@ -301,7 +359,7 @@ func TestUnexpectedBodyReadFailureReturns500WithoutChangingState(t *testing.T) {
 		{name: "budget after JSON", path: "/api/budgets", body: `{"category":"еда","limit":100}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			handler := NewHandler()
+			handler := newTestHandler()
 			request(t, handler, http.MethodPost, "/api/budgets", `{"category":"еда","limit":10}`, http.StatusCreated)
 			request(t, handler, http.MethodPost, "/api/transactions", `{"category":"еда","amount":4}`, http.StatusCreated)
 			response := httptest.NewRecorder()
@@ -325,7 +383,7 @@ func TestUnexpectedBodyReadFailureReturns500WithoutChangingState(t *testing.T) {
 }
 
 func TestConcurrentRequestsKeepBudgetAndAssignedIDsConsistent(t *testing.T) {
-	handler := NewHandler()
+	handler := newTestHandler()
 	request(t, handler, http.MethodPost, "/api/budgets", `{"category":"еда","limit":20}`, http.StatusCreated)
 	type result struct {
 		method   string
@@ -409,7 +467,7 @@ func TestEveryRequestLogsMethodPathAndDuration(t *testing.T) {
 	previousOutput := log.Writer()
 	log.SetOutput(&output)
 	t.Cleanup(func() { log.SetOutput(previousOutput) })
-	handler := NewHandler()
+	handler := newTestHandler()
 	durationPattern := regexp.MustCompile(`\b[0-9]+(?:\.[0-9]+)?(?:ns|µs|us|ms|s|m|h)\b`)
 	for _, tc := range []struct {
 		method string
@@ -440,7 +498,7 @@ func TestResponseWriteFailureIsLoggedWithoutRetry(t *testing.T) {
 	log.SetOutput(&output)
 	t.Cleanup(func() { log.SetOutput(previousOutput) })
 	response := &brokenResponseWriter{header: make(http.Header)}
-	NewHandler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/transactions", nil))
+	newTestHandler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/transactions", nil))
 	if response.writes != 1 || response.headers != 1 {
 		t.Errorf("body writes = %d, header writes = %d; want one each", response.writes, response.headers)
 	}

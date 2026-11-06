@@ -1,4 +1,4 @@
-package store_test
+package integration_test
 
 import (
 	"context"
@@ -21,7 +21,10 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/redis/go-redis/v9"
 	"github.com/skitchen1992/Ledger/ledger"
-	"github.com/skitchen1992/Ledger/ledger/internal/store"
+	"github.com/skitchen1992/Ledger/ledger/domain"
+	"github.com/skitchen1992/Ledger/ledger/internal/cache"
+	"github.com/skitchen1992/Ledger/ledger/internal/repository/pg"
+	"github.com/skitchen1992/Ledger/ledger/service"
 )
 
 // Each test owns a random schema, including its sequences. No application tables
@@ -98,13 +101,13 @@ func (f *databaseFixture) connect(t *testing.T) *sql.DB {
 
 func TestSQLBudgetsUpsertAndValidation(t *testing.T) {
 	f := newDatabaseFixture(t)
-	s := store.New(f.db, nil)
+	s := newSQLService(f.db, nil)
 	for _, budget := range []ledger.Budget{
 		{Category: "travel", Limit: 20},
 		{Category: "food", Limit: 30},
 		{Category: "food", Limit: 40},
 	} {
-		if err := s.SetBudget(budget); err != nil {
+		if err := s.SetBudget(context.Background(), budget); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -118,10 +121,10 @@ func TestSQLBudgetsUpsertAndValidation(t *testing.T) {
 		{Category: "food", Limit: 1e12},
 		{Category: " \t", Limit: 10},
 	} {
-		if err := s.SetBudget(budget); !errors.Is(err, store.ErrInvalidInput) {
+		if err := s.SetBudget(context.Background(), budget); !errors.Is(err, service.ErrInvalidInput) {
 			t.Fatalf("invalid budget %#v: expected ErrInvalidInput, got %v", budget, err)
 		}
-		got, err := s.ListBudgets()
+		got, err := s.ListBudgets(context.Background())
 		if err != nil || !reflect.DeepEqual(got, want) {
 			t.Fatalf("invalid update changed budgets: got=%#v, err=%v", got, err)
 		}
@@ -134,37 +137,37 @@ func TestSQLBudgetsUpsertAndValidation(t *testing.T) {
 
 func TestSQLBudgetLimitIsExactAndRejectedExpenseDoesNotConsumeID(t *testing.T) {
 	f := newDatabaseFixture(t)
-	s := store.New(f.db, nil)
-	if err := s.SetBudget(ledger.Budget{Category: "food", Limit: 0.3}); err != nil {
+	s := newSQLService(f.db, nil)
+	if err := s.SetBudget(context.Background(), ledger.Budget{Category: "food", Limit: 0.3}); err != nil {
 		t.Fatal(err)
 	}
 	for _, amount := range []float64{0.1, 0.2} {
-		if err := s.AddTransaction(ledger.Transaction{Amount: amount, Category: "food", Date: "2026-01-01"}); err != nil {
+		if _, err := s.CreateTransaction(context.Background(), ledger.Transaction{Amount: amount, Category: "food", Date: "2026-01-01"}); err != nil {
 			t.Fatalf("exact budget boundary should be accepted: %v", err)
 		}
 	}
-	if err := s.AddTransaction(ledger.Transaction{Amount: 0.01, Category: "food", Date: "2026-01-01"}); !errors.Is(err, ledger.ErrBudgetExceeded) {
+	if _, err := s.CreateTransaction(context.Background(), ledger.Transaction{Amount: 0.01, Category: "food", Date: "2026-01-01"}); !errors.Is(err, ledger.ErrBudgetExceeded) {
 		t.Fatalf("expected accumulated budget error, got %v", err)
 	}
 	tx, err := s.CreateTransaction(context.Background(), ledger.Transaction{ID: 999, Amount: 50, Category: "unbudgeted", Date: "2026-01-02"})
 	if err != nil || tx.ID != 3 {
 		t.Fatalf("unbudgeted expense should use next ID 3: tx=%#v, err=%v", tx, err)
 	}
-	got, err := s.ListTransactions()
+	got, err := s.ListTransactions(context.Background())
 	if err != nil || len(got) != 3 {
 		t.Fatalf("rejected expense must not be inserted: rows=%#v, err=%v", got, err)
 	}
-	if err := s.SetBudget(ledger.Budget{Category: "food", Limit: 0.2}); err != nil {
+	if err := s.SetBudget(context.Background(), ledger.Budget{Category: "food", Limit: 0.2}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddTransaction(ledger.Transaction{Amount: 0.01, Category: "food", Date: "2026-01-01"}); !errors.Is(err, ledger.ErrBudgetExceeded) {
+	if _, err := s.CreateTransaction(context.Background(), ledger.Transaction{Amount: 0.01, Category: "food", Date: "2026-01-01"}); !errors.Is(err, ledger.ErrBudgetExceeded) {
 		t.Fatalf("budget update must retain previous spending: %v", err)
 	}
 }
 
 func TestSQLTransactionValidationOrderingAndPersistence(t *testing.T) {
 	f := newDatabaseFixture(t)
-	s := store.New(f.db, nil)
+	s := newSQLService(f.db, nil)
 	first := ledger.Transaction{Amount: 12.34, Category: "food", Description: "Обед: 'суп'", Date: "2026-01-02"}
 	first, err := s.CreateTransaction(context.Background(), first)
 	if err != nil {
@@ -183,10 +186,10 @@ func TestSQLTransactionValidationOrderingAndPersistence(t *testing.T) {
 		{Amount: 1, Category: "food", Date: ""},
 	}
 	for _, tx := range invalid {
-		if err := s.AddTransaction(tx); !errors.Is(err, store.ErrInvalidInput) {
+		if _, err := s.CreateTransaction(context.Background(), tx); !errors.Is(err, service.ErrInvalidInput) {
 			t.Fatalf("invalid expense %#v: expected ErrInvalidInput, got %v", tx, err)
 		}
-		got, err := s.ListTransactions()
+		got, err := s.ListTransactions(context.Background())
 		if err != nil || !reflect.DeepEqual(got, []ledger.Transaction{first}) {
 			t.Fatalf("invalid expense changed history: got=%#v, err=%v", got, err)
 		}
@@ -202,28 +205,30 @@ func TestSQLTransactionValidationOrderingAndPersistence(t *testing.T) {
 	if first.ID != 1 || older.ID != 2 || laterID.ID != 3 {
 		t.Fatalf("validation failure consumed IDs: %d, %d, %d", first.ID, older.ID, laterID.ID)
 	}
-	if err := s.SetBudget(ledger.Budget{Category: "food", Limit: 100}); err != nil {
+	if err := s.SetBudget(context.Background(), ledger.Budget{Category: "food", Limit: 100}); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted := store.New(f.connect(t), nil)
-	got, err := restarted.ListTransactions()
+	restarted := newSQLService(f.connect(t), nil)
+	got, err := restarted.ListTransactions(context.Background())
 	want := []ledger.Transaction{laterID, first, older}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("new connection must preserve fields and date DESC, id DESC: got=%#v, err=%v", got, err)
 	}
-	budgets, err := restarted.ListBudgets()
+	budgets, err := restarted.ListBudgets(context.Background())
 	if err != nil || !reflect.DeepEqual(budgets, []ledger.Budget{{Category: "food", Limit: 100}}) {
 		t.Fatalf("new connection lost budgets: got=%#v, err=%v", budgets, err)
 	}
 }
 
-func TestSQLConcurrentExpensesRespectBudget(t *testing.T) {
+func TestSQLConcurrentServicesRespectBudget(t *testing.T) {
 	f := newDatabaseFixture(t)
-	s := store.New(f.db, nil)
-	if err := s.SetBudget(ledger.Budget{Category: "food", Limit: 10}); err != nil {
+	s := newSQLService(f.db, nil)
+	// Independent pools model Gateway and standalone Ledger sharing a database.
+	services := []service.ReportingService{s, newSQLService(f.connect(t), nil)}
+	if err := s.SetBudget(context.Background(), ledger.Budget{Category: "food", Limit: 10}); err != nil {
 		t.Fatal(err)
 	}
 	const attempts = 20
@@ -231,11 +236,13 @@ func TestSQLConcurrentExpensesRespectBudget(t *testing.T) {
 	results := make(chan error, attempts)
 	var workers sync.WaitGroup
 	for i := 0; i < attempts; i++ {
+		application := services[i%len(services)]
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
 			<-start
-			results <- s.AddTransaction(ledger.Transaction{Amount: 1, Category: "food", Date: "2026-01-01"})
+			_, err := application.CreateTransaction(context.Background(), ledger.Transaction{Amount: 1, Category: "food", Date: "2026-01-01"})
+			results <- err
 		}()
 	}
 	close(start)
@@ -265,7 +272,7 @@ func TestSQLConcurrentExpensesRespectBudget(t *testing.T) {
 	}
 }
 
-func seedReport(t *testing.T, s *store.Store) store.ReportSummary {
+func seedReport(t *testing.T, s service.ReportingService) domain.ReportSummary {
 	t.Helper()
 	var token [8]byte
 	if _, err := rand.Read(token[:]); err != nil {
@@ -280,19 +287,19 @@ func seedReport(t *testing.T, s *store.Store) store.ReportSummary {
 		{Amount: 100, Category: "outside", Date: from.AddDate(0, 0, -1).Format(time.DateOnly)},
 		{Amount: 100, Category: "outside", Date: to.AddDate(0, 0, 1).Format(time.DateOnly)},
 	} {
-		if err := s.AddTransaction(tx); err != nil {
+		if _, err := s.CreateTransaction(context.Background(), tx); err != nil {
 			t.Fatal(err)
 		}
 	}
-	return store.ReportSummary{
+	return domain.ReportSummary{
 		From: from.Format(time.DateOnly), To: to.Format(time.DateOnly), Total: 7,
-		Categories: []store.CategoryTotal{{Category: "alpha", Amount: 3.75}, {Category: "beta", Amount: 3.25}},
+		Categories: []domain.CategoryTotal{{Category: "alpha", Amount: 3.75}, {Category: "beta", Amount: 3.25}},
 	}
 }
 
 func TestSQLReportInclusiveRangeAndInvalidInput(t *testing.T) {
 	f := newDatabaseFixture(t)
-	s := store.New(f.db, nil)
+	s := newSQLService(f.db, nil)
 	want := seedReport(t, s)
 	got, err := s.GetReportSummary(context.Background(), want.From, want.To)
 	if err != nil || !reflect.DeepEqual(got, want) {
@@ -303,7 +310,7 @@ func TestSQLReportInclusiveRangeAndInvalidInput(t *testing.T) {
 		t.Fatalf("empty range should return zero and an empty category array: got=%#v, err=%v", empty, err)
 	}
 	for _, dates := range [][2]string{{"bad", want.To}, {want.From, "2026-02-30"}, {want.To, want.From}} {
-		if _, err := s.GetReportSummary(context.Background(), dates[0], dates[1]); !errors.Is(err, store.ErrInvalidInput) {
+		if _, err := s.GetReportSummary(context.Background(), dates[0], dates[1]); !errors.Is(err, service.ErrInvalidInput) {
 			t.Fatalf("invalid range %v: expected ErrInvalidInput, got %v", dates, err)
 		}
 	}
@@ -326,7 +333,7 @@ func TestRedisReportCacheTTLHitRefreshAndFallback(t *testing.T) {
 	if err := client.Ping(ctx).Err(); err != nil {
 		t.Fatal(err)
 	}
-	s := store.New(f.db, client)
+	s := newSQLService(f.db, client)
 	want := seedReport(t, s)
 	key := "report:summary:" + want.From + ":" + want.To
 	if exists, err := client.Exists(ctx, key).Result(); err != nil || exists != 0 {
@@ -373,7 +380,7 @@ func TestRedisReportCacheTTLHitRefreshAndFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var repaired store.ReportSummary
+	var repaired domain.ReportSummary
 	if err := json.Unmarshal(cached, &repaired); err != nil || !reflect.DeepEqual(repaired, want) {
 		t.Fatalf("malformed cache must be replaced with valid report: got=%#v, err=%v", repaired, err)
 	}
@@ -381,9 +388,14 @@ func TestRedisReportCacheTTLHitRefreshAndFallback(t *testing.T) {
 	if err := closedClient.Close(); err != nil {
 		t.Fatal(err)
 	}
-	uncached := store.New(f.db, closedClient)
+	uncached := newSQLService(f.db, closedClient)
 	got, err = uncached.GetReportSummary(ctx, want.From, want.To)
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("Redis outage should fall back to PostgreSQL: got=%#v, err=%v", got, err)
 	}
+}
+
+func newSQLService(db *sql.DB, client *redis.Client) service.ReportingService {
+	repo := pg.New(db)
+	return service.NewReporting(service.NewStrict(repo, repo, repo), repo, cache.NewReportCache(client))
 }

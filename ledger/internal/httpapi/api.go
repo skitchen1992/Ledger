@@ -9,17 +9,16 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/skitchen1992/Ledger/ledger"
-	"github.com/skitchen1992/Ledger/ledger/internal/store"
+	"github.com/skitchen1992/Ledger/ledger/service"
 )
 
 type handler struct {
-	store *store.Store
+	service service.ReportingService
 }
 
 // NewHandler serves Ledger's budgets, transactions, and cached report summary.
-func NewHandler(storage *store.Store) http.Handler {
-	h := &handler{store: storage}
+func NewHandler(application service.ReportingService) http.Handler {
+	h := &handler{service: application}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
 		defer func() {
@@ -60,9 +59,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			methodNotAllowed(w, r, "GET")
 			return
 		}
-		summary, err := h.store.GetReportSummary(r.Context(), r.URL.Query().Get("from"), r.URL.Query().Get("to"))
+		summary, err := h.service.GetReportSummary(r.Context(), r.URL.Query().Get("from"), r.URL.Query().Get("to"))
 		if err != nil {
-			writeStoreError(w, r, err)
+			writeServiceError(w, r, err)
 			return
 		}
 		writeJSON(w, r, http.StatusOK, summary)
@@ -72,30 +71,26 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) createBudget(w http.ResponseWriter, r *http.Request) {
-	var budget ledger.Budget
+	var budget service.Budget
 	if err := decodeJSON(r.Body, &budget); err != nil {
 		writeDecodeError(w, r, err)
 		return
 	}
-	if err := budget.Validate(); err != nil {
-		writeError(w, r, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := h.store.SetBudget(budget); err != nil {
-		writeStoreError(w, r, err)
+	if err := h.service.SetBudget(r.Context(), budget); err != nil {
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, r, http.StatusCreated, budget)
 }
 
 func (h *handler) listBudgets(w http.ResponseWriter, r *http.Request) {
-	budgets, err := h.store.ListBudgets()
+	budgets, err := h.service.ListBudgets(r.Context())
 	if err != nil {
-		writeStoreError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	if budgets == nil {
-		budgets = []ledger.Budget{}
+		budgets = []service.Budget{}
 	}
 	writeJSON(w, r, http.StatusOK, budgets)
 }
@@ -115,7 +110,7 @@ type transactionResponse struct {
 	Date        string  `json:"date"`
 }
 
-func transactionJSON(tx ledger.Transaction) transactionResponse {
+func transactionJSON(tx service.Transaction) transactionResponse {
 	return transactionResponse{
 		ID: tx.ID, Amount: tx.Amount, Category: tx.Category,
 		Description: tx.Description, Date: tx.Date,
@@ -128,26 +123,22 @@ func (h *handler) createTransaction(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, r, err)
 		return
 	}
-	tx := ledger.Transaction{
+	tx := service.Transaction{
 		Amount: request.Amount, Category: request.Category,
 		Description: request.Description, Date: request.Date,
 	}
-	if err := tx.Validate(); err != nil {
-		writeError(w, r, http.StatusBadRequest, err.Error())
-		return
-	}
-	tx, err := h.store.CreateTransaction(r.Context(), tx)
+	tx, err := h.service.CreateTransaction(r.Context(), tx)
 	if err != nil {
-		writeStoreError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, r, http.StatusCreated, transactionJSON(tx))
 }
 
 func (h *handler) listTransactions(w http.ResponseWriter, r *http.Request) {
-	transactions, err := h.store.ListTransactions()
+	transactions, err := h.service.ListTransactions(r.Context())
 	if err != nil {
-		writeStoreError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	response := make([]transactionResponse, 0, len(transactions))
@@ -182,14 +173,14 @@ func writeDecodeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	writeStoreError(w, r, err)
+	writeServiceError(w, r, err)
 }
 
-func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
+func writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
-	case errors.Is(err, ledger.ErrBudgetExceeded):
+	case errors.Is(err, service.ErrBudgetExceeded):
 		writeError(w, r, http.StatusConflict, "budget exceeded")
-	case errors.Is(err, store.ErrInvalidInput):
+	case errors.Is(err, service.ErrInvalidInput):
 		writeError(w, r, http.StatusBadRequest, err.Error())
 	default:
 		log.Printf("handle %s %s: %v", r.Method, r.URL.Path, err)

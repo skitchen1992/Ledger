@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -13,10 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/skitchen1992/Ledger/ledger/internal/cache"
-	"github.com/skitchen1992/Ledger/ledger/internal/db"
+	"github.com/skitchen1992/Ledger/ledger/app"
 	"github.com/skitchen1992/Ledger/ledger/internal/httpapi"
-	"github.com/skitchen1992/Ledger/ledger/internal/store"
 )
 
 func main() {
@@ -29,22 +26,11 @@ func main() {
 }
 
 func run(ctx context.Context) error {
-	pool, err := db.Open(ctx)
+	ledgerService, closeFn, err := app.NewReporting(ctx)
 	if err != nil {
 		return err
 	}
-	defer pool.Close()
-	log.Print("Ledger connected to PostgreSQL")
-	if err := checkSchema(ctx, pool); err != nil {
-		return err
-	}
-
-	redisClient, err := cache.Open(ctx)
-	if err != nil {
-		return err
-	}
-	defer redisClient.Close()
-	log.Print("Ledger connected to Redis")
+	defer closeFn()
 
 	addr := os.Getenv("LEDGER_ADDR")
 	if addr == "" {
@@ -55,25 +41,7 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("listen for Ledger HTTP requests on %q: %w", addr, err)
 	}
 	log.Printf("Ledger service started: HTTP listening on %s", listener.Addr())
-	return serve(ctx, listener, httpapi.NewHandler(store.New(pool, redisClient)))
-}
-
-func checkSchema(ctx context.Context, pool *sql.DB) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	for _, query := range []string{
-		"SELECT id, category, limit_amount FROM budgets LIMIT 0",
-		"SELECT id, amount, category, description, date FROM expenses LIMIT 0",
-	} {
-		rows, err := pool.QueryContext(ctx, query)
-		if err != nil {
-			return fmt.Errorf("check Ledger schema (apply Goose migrations before starting): %w", err)
-		}
-		if err := rows.Close(); err != nil {
-			return fmt.Errorf("close Ledger schema query: %w", err)
-		}
-	}
-	return nil
+	return serve(ctx, listener, httpapi.NewHandler(ledgerService))
 }
 
 func serve(ctx context.Context, listener net.Listener, handler http.Handler) error {
