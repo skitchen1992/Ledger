@@ -1,4 +1,4 @@
-package main
+package ledger
 
 import (
 	"encoding/json"
@@ -88,6 +88,60 @@ func TestListTransactionsReturnsIndependentCopy(t *testing.T) {
 	var another Ledger
 	if got := another.ListTransactions(); len(got) != 0 {
 		t.Fatalf("independent ledger shares history: %+v", got)
+	}
+}
+
+func TestListBudgetsStartsEmpty(t *testing.T) {
+	var ledger Ledger
+	if got := ledger.ListBudgets(); got == nil || len(got) != 0 {
+		t.Fatalf("new ledger budgets = %+v, want non-nil empty slice", got)
+	}
+}
+
+func TestListBudgetsSortsCategoriesAndReflectsUpdates(t *testing.T) {
+	var ledger Ledger
+	for _, budget := range []Budget{
+		{Category: "транспорт", Limit: 200},
+		{Category: "еда", Limit: 100},
+		{Category: "книги", Limit: 300},
+	} {
+		if err := ledger.SetBudget(budget); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []Budget{
+		{Category: "еда", Limit: 100},
+		{Category: "книги", Limit: 300},
+		{Category: "транспорт", Limit: 200},
+	}
+	if got := ledger.ListBudgets(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListBudgets() = %+v, want %+v", got, want)
+	}
+	if err := ledger.SetBudget(Budget{Category: "книги", Limit: 500}); err != nil {
+		t.Fatal(err)
+	}
+	want[1].Limit = 500
+	if got := ledger.ListBudgets(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListBudgets() after update = %+v, want %+v", got, want)
+	}
+}
+
+func TestListBudgetsReturnsIndependentCopy(t *testing.T) {
+	var ledger Ledger
+	budget := Budget{Category: "еда", Limit: 100}
+	if err := ledger.SetBudget(budget); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := ledger.ListBudgets()
+	snapshot[0] = Budget{Category: "изменено", Limit: 999}
+	if got := ledger.ListBudgets(); !reflect.DeepEqual(got, []Budget{budget}) {
+		t.Fatalf("editing a returned slice changed budgets: %+v", got)
+	}
+	if err := ledger.SetBudget(Budget{Category: "еда", Limit: 200}); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot[0] != (Budget{Category: "изменено", Limit: 999}) {
+		t.Fatalf("updating a budget changed an existing snapshot: %+v", snapshot)
 	}
 }
 

@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 )
 
 func TestPing(t *testing.T) {
-	handler := newHandler()
+	handler := NewHandler()
 	for _, target := range []string{"/ping", "/ping?check=1"} {
 		t.Run(target, func(t *testing.T) {
 			response := httptest.NewRecorder()
@@ -19,18 +19,18 @@ func TestPing(t *testing.T) {
 			if response.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200", response.Code)
 			}
-			if got := response.Body.String(); got != "pong" {
-				t.Errorf("body = %q, want pong", got)
+			if got := response.Body.String(); got != "\"pong\"\n" {
+				t.Errorf("body = %q, want JSON string pong", got)
 			}
-			if got := response.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
-				t.Errorf("Content-Type = %q, want text/plain; charset=utf-8", got)
+			if got := response.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+				t.Errorf("Content-Type = %q, want application/json; charset=utf-8", got)
 			}
 		})
 	}
 }
 
 func TestPingRejectsOtherMethods(t *testing.T) {
-	handler := newHandler()
+	handler := NewHandler()
 	for _, method := range []string{
 		http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete,
 		http.MethodHead, http.MethodOptions,
@@ -49,7 +49,7 @@ func TestPingRejectsOtherMethods(t *testing.T) {
 }
 
 func TestUnknownPaths(t *testing.T) {
-	handler := newHandler()
+	handler := NewHandler()
 	for _, path := range []string{"/", "/unknown", "/ping/", "/ping/extra", "/pingpong"} {
 		t.Run(path, func(t *testing.T) {
 			response := httptest.NewRecorder()
@@ -68,7 +68,7 @@ func TestPingLogsWriteFailureWithoutRetry(t *testing.T) {
 	t.Cleanup(func() { log.SetOutput(previousOutput) })
 
 	response := &failingResponseWriter{header: make(http.Header)}
-	newHandler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ping", nil))
+	NewHandler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ping", nil))
 	if response.writes != 1 || response.headers != 1 {
 		t.Errorf("response writes = %d, header writes = %d; want one each", response.writes, response.headers)
 	}

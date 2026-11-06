@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/skitchen1992/Ledger/ledger"
 )
 
 func main() {
@@ -16,13 +18,13 @@ func main() {
 }
 
 func run(budgetsPath string, out io.Writer) error {
-	ledger := Ledger{transactions: make([]Transaction, 0)}
+	var store ledger.Ledger
 	file, err := os.Open(budgetsPath)
 	if err != nil {
 		return fmt.Errorf("open budgets file %q: %w", budgetsPath, err)
 	}
 	defer file.Close()
-	if err := ledger.LoadBudgets(bufio.NewReader(file)); err != nil {
+	if err := store.LoadBudgets(bufio.NewReader(file)); err != nil {
 		return fmt.Errorf("load budgets from %q: %w", budgetsPath, err)
 	}
 
@@ -31,11 +33,11 @@ func run(budgetsPath string, out io.Writer) error {
 	}
 
 	// Демонстрационные значения проверяются через общий интерфейс и не сохраняются.
-	for _, value := range []Validatable{
-		Transaction{Amount: 100, Category: "пример", Date: "2026-11-06"},
-		Budget{Category: "пример", Limit: 100},
+	for _, value := range []ledger.Validatable{
+		ledger.Transaction{Amount: 100, Category: "пример", Date: "2026-11-06"},
+		ledger.Budget{Category: "пример", Limit: 100},
 	} {
-		if err := CheckValid(value); err != nil {
+		if err := ledger.CheckValid(value); err != nil {
 			return fmt.Errorf("validate %T: %w", value, err)
 		}
 		if _, err := fmt.Fprintf(out, "Проверка %T: данные корректны\n", value); err != nil {
@@ -43,7 +45,7 @@ func run(budgetsPath string, out io.Writer) error {
 		}
 	}
 
-	for _, tx := range []Transaction{
+	for _, tx := range []ledger.Transaction{
 		{Amount: 1500, Category: "еда", Description: "Продукты", Date: "2026-11-06"},
 		{Amount: 2000, Category: "еда", Description: "Покупки на неделю", Date: "2026-11-06"},
 		{Amount: 2000, Category: "еда", Description: "Ужин", Date: "2026-11-06"},
@@ -51,8 +53,8 @@ func run(budgetsPath string, out io.Writer) error {
 		{Amount: 700, Category: "транспорт", Description: "Проездной", Date: "2026-11-06"},
 		{Amount: 950, Category: "книги", Description: "Учебник Go", Date: "2026-11-06"},
 	} {
-		if err := ledger.AddTransaction(tx); err != nil {
-			if !errors.Is(err, ErrBudgetExceeded) {
+		if err := store.AddTransaction(tx); err != nil {
+			if !errors.Is(err, ledger.ErrBudgetExceeded) {
 				return fmt.Errorf("add transaction %q: %w", tx.Description, err)
 			}
 			if _, writeErr := fmt.Fprintf(out, "Отказ: %s — %.2f руб. (%s): %v\n",
@@ -67,7 +69,7 @@ func run(budgetsPath string, out io.Writer) error {
 		}
 	}
 
-	saved := ledger.ListTransactions()
+	saved := store.ListTransactions()
 	if _, err := fmt.Fprintf(out, "\nСохранено транзакций: %d\n", len(saved)); err != nil {
 		return fmt.Errorf("print transaction count: %w", err)
 	}

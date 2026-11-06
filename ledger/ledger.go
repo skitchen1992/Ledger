@@ -1,4 +1,4 @@
-package main
+package ledger
 
 import (
 	"encoding/json"
@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"math/big"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -119,6 +120,18 @@ func (l *Ledger) SetBudget(b Budget) error {
 	}
 	l.budgets[b.Category] = b
 	return nil
+}
+
+// ListBudgets возвращает независимую копию бюджетов в порядке категорий.
+func (l *Ledger) ListBudgets() []Budget {
+	budgets := make([]Budget, 0, len(l.budgets))
+	for _, budget := range l.budgets {
+		budgets = append(budgets, budget)
+	}
+	sort.Slice(budgets, func(i, j int) bool {
+		return budgets[i].Category < budgets[j].Category
+	})
+	return budgets
 }
 
 // LoadBudgets принимает один JSON-массив бюджетов и применяет его целиком.

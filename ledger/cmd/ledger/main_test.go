@@ -29,8 +29,8 @@ func TestRunBudgetDemo(t *testing.T) {
 	}
 	output := out.String()
 	const wantStart = "Ledger service started\n" +
-		"Проверка main.Transaction: данные корректны\n" +
-		"Проверка main.Budget: данные корректны\n"
+		"Проверка ledger.Transaction: данные корректны\n" +
+		"Проверка ledger.Budget: данные корректны\n"
 	if !strings.HasPrefix(output, wantStart) {
 		t.Errorf("missing startup or validation demonstration: %q", output)
 	}
@@ -102,7 +102,7 @@ func (w *failingOutput) Write(p []byte) (int, error) {
 func TestRunStopsOnOutputError(t *testing.T) {
 	writeErr := errors.New("output unavailable")
 	for _, failOn := range []string{
-		"Ledger service started", "Проверка main.Transaction:", "Проверка main.Budget:",
+		"Ledger service started", "Проверка ledger.Transaction:", "Проверка ledger.Budget:",
 		"Добавлено:", "Отказ:", "Сохранено транзакций:",
 		"1 |", "2 |", "3 |", "4 |", "5 |",
 	} {
