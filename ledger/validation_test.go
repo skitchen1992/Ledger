@@ -9,6 +9,7 @@ import (
 )
 
 func TestTransactionValidate(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name      string
 		tx        Transaction
@@ -27,6 +28,7 @@ func TestTransactionValidate(t *testing.T) {
 		{name: "blank category", tx: Transaction{Category: " \t\n", Amount: 10}, wantField: "category"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			err := tt.tx.Validate()
 			if tt.wantField == "" {
 				if err != nil {
@@ -42,6 +44,7 @@ func TestTransactionValidate(t *testing.T) {
 }
 
 func TestBudgetValidate(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name      string
 		budget    Budget
@@ -59,6 +62,7 @@ func TestBudgetValidate(t *testing.T) {
 		{name: "blank category", budget: Budget{Category: " \t\n", Limit: 100}, wantField: "category"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			err := tt.budget.Validate()
 			if tt.wantField == "" {
 				if err != nil {
@@ -74,6 +78,7 @@ func TestBudgetValidate(t *testing.T) {
 }
 
 func TestCheckValidSupportsTransactionsAndBudgets(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name    string
 		value   Validatable
@@ -85,6 +90,7 @@ func TestCheckValidSupportsTransactionsAndBudgets(t *testing.T) {
 		{name: "invalid budget", value: Budget{Category: "еда"}, wantErr: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if err := CheckValid(tt.value); (err != nil) != tt.wantErr {
 				t.Fatalf("CheckValid(%+v) = %v, want error: %t", tt.value, err, tt.wantErr)
 			}
@@ -93,6 +99,7 @@ func TestCheckValidSupportsTransactionsAndBudgets(t *testing.T) {
 }
 
 func TestSetBudgetRejectsInvalidInputWithoutChangingState(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name   string
 		budget Budget
@@ -106,13 +113,16 @@ func TestSetBudgetRejectsInvalidInputWithoutChangingState(t *testing.T) {
 		{name: "blank category", budget: Budget{Category: " \t\n", Limit: 100}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			for _, existingBudget := range []bool{false, true} {
 				name := "new ledger"
 				if existingBudget {
 					name = "existing budget and history"
 				}
 				t.Run(name, func(t *testing.T) {
+					t.Parallel()
 					var ledger Ledger
+					t.Cleanup(ledger.Reset)
 					if existingBudget {
 						if err := ledger.SetBudget(Budget{Category: "еда", Limit: 100}); err != nil {
 							t.Fatal(err)

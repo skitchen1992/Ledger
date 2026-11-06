@@ -276,10 +276,43 @@ gofmt -l .
 (cd gateway && go test ./... && go vet ./...)
 (cd ledger && go test ./... && go vet ./...)
 (cd gateway && go test -race ./...)
+(cd ledger && go test -race ./...)
 ```
 
 У `gofmt -l .` не должно быть вывода. Корневого `go.mod` нет, поэтому Go-проверки
 выполняются отдельно в каждом модуле.
+
+Для покрытия и HTML-отчётов:
+
+```sh
+(cd gateway && go test ./... -cover -coverprofile=cover.out && go tool cover -html=cover.out -o cover.html && go tool cover -func=cover.out)
+(cd ledger && go test ./... -cover -coverprofile=cover.out && go tool cover -html=cover.out -o cover.html && go tool cover -func=cover.out)
+```
+
+Профили сохраняются в `gateway/cover.out` и `ledger/cover.out`, HTML-отчёты —
+в `gateway/cover.html` и `ledger/cover.html`. HTML можно открыть в браузере;
+эти файлы исключены из Git. Для вывода отдельных сценариев добавьте `-v`
+к `go test`.
+
+Покрытие тестами по сформированным профилям:
+
+| Область | Покрытие операторов |
+| --- | --- |
+| Домен `ledger` | 97,3% |
+| HTTP-пакет `gateway/internal/api` | 93,2% |
+| Весь модуль `ledger`, включая CLI | 93,4% |
+| Весь модуль `gateway`, включая запуск сервера | 88,9% |
+
+Итоги модулей — строки `total` из `go tool cover -func=cover.out`.
+Точки входа `main()` напрямую тестами не вызываются и учтены в этих итогах.
+
+Тесты хранилища создают собственные экземпляры `Ledger` и регистрируют
+`t.Cleanup(ledger.Reset)`. Метод `(*Ledger).Reset()` очищает транзакции и бюджеты;
+следующая транзакция снова получает ID 1. Общего глобального хранилища нет.
+Независимые unit-тесты и табличные подтесты используют `t.Parallel()`.
+HTTP-сценарии выполняются последовательно с новым `api.NewHandler()` для каждого
+независимого сценария. В `TestTransactionsAPI` ветки `ok`, `exceeded` и
+`bad_json` проверяют цепочку создания бюджета и транзакций через настоящий роутер.
 
 Тесты проверяют HTTP DTO, статусы и JSON ошибок, пустые списки, логирование,
 параллельные запросы без превышения лимита и повторения ID,

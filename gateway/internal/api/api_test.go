@@ -53,36 +53,65 @@ func TestEmptyCollectionsAndIndependentHandlers(t *testing.T) {
 	}
 }
 
-func TestTransactionsPreservePublicFieldsAndOrder(t *testing.T) {
-	handler := NewHandler()
-	want := []transactionJSON{
-		{ID: 1, Amount: 450, Category: "еда", Description: "ланч", Date: "2025-09-10"},
-		{ID: 2, Amount: 80.5, Category: "транспорт", Description: "метро", Date: "2025-09-11"},
-	}
-	for i, body := range []string{
-		`{"amount":450,"category":"еда","description":"ланч","date":"2025-09-10","id":99}`,
-		`{"amount":80.5,"category":"транспорт","description":"метро","date":"2025-09-11"}`,
+func TestTransactionsAPI(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		body      string
+		status    int
+		wantError string
+	}{
+		{
+			name:   "ok",
+			body:   `{"amount":80.5,"category":"транспорт","description":"метро","date":"2025-09-11"}`,
+			status: http.StatusCreated,
+		},
+		{
+			name:      "exceeded",
+			body:      `{"amount":4550.01,"category":"еда","description":"покупки","date":"2025-09-11"}`,
+			status:    http.StatusConflict,
+			wantError: "budget exceeded",
+		},
+		{
+			name:   "bad_json",
+			body:   `{"amount":10,"category":"еда"`,
+			status: http.StatusBadRequest,
+		},
 	} {
-		response := request(t, handler, http.MethodPost, "/api/transactions", body, http.StatusCreated)
-		if got := decodeResponse[transactionJSON](t, response); got != want[i] {
-			t.Errorf("created transaction = %+v, want %+v", got, want[i])
-		}
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(response.Body.Bytes(), &fields); err != nil {
-			t.Fatal(err)
-		}
-		if len(fields) != 5 {
-			t.Errorf("transaction JSON fields = %v, want five public fields", fields)
-		}
-		for _, key := range []string{"id", "amount", "category", "description", "date"} {
-			if _, ok := fields[key]; !ok {
-				t.Errorf("transaction JSON is missing lowercase field %q", key)
+		t.Run(tc.name, func(t *testing.T) {
+			// NewHandler owns a fresh Ledger, so each HTTP scenario is isolated.
+			handler := NewHandler()
+			budget := budgetJSON{Category: "еда", Limit: 5000}
+			response := request(t, handler, http.MethodPost, "/api/budgets", `{"category":"еда","limit":5000}`, http.StatusCreated)
+			if got := decodeResponse[budgetJSON](t, response); got != budget {
+				t.Fatalf("created budget = %+v, want %+v", got, budget)
 			}
-		}
-	}
-	response := request(t, handler, http.MethodGet, "/api/transactions?check=1", "", http.StatusOK)
-	if got := decodeResponse[[]transactionJSON](t, response); !reflect.DeepEqual(got, want) {
-		t.Errorf("history = %+v, want %+v", got, want)
+			response = request(t, handler, http.MethodGet, "/api/budgets", "", http.StatusOK)
+			if got, want := decodeResponse[[]budgetJSON](t, response), []budgetJSON{budget}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("budgets = %+v, want %+v", got, want)
+			}
+
+			first := transactionJSON{ID: 1, Amount: 450, Category: "еда", Description: "ланч", Date: "2025-09-10"}
+			response = request(t, handler, http.MethodPost, "/api/transactions", `{"amount":450,"category":"еда","description":"ланч","date":"2025-09-10","id":99}`, http.StatusCreated)
+			assertTransactionResponse(t, response, first)
+
+			response = request(t, handler, http.MethodPost, "/api/transactions", tc.body, tc.status)
+			wantHistory := []transactionJSON{first}
+			if tc.status == http.StatusCreated {
+				second := transactionJSON{ID: 2, Amount: 80.5, Category: "транспорт", Description: "метро", Date: "2025-09-11"}
+				assertTransactionResponse(t, response, second)
+				wantHistory = append(wantHistory, second)
+			} else {
+				assertJSONError(t, response, tc.wantError)
+			}
+			response = request(t, handler, http.MethodGet, "/api/transactions?check=1", "", http.StatusOK)
+			if got := decodeResponse[[]transactionJSON](t, response); !reflect.DeepEqual(got, wantHistory) {
+				t.Fatalf("history = %+v, want %+v", got, wantHistory)
+			}
+			if tc.status != http.StatusCreated {
+				response = request(t, handler, http.MethodPost, "/api/transactions", `{"amount":1,"category":"еда"}`, http.StatusCreated)
+				assertTransactionResponse(t, response, transactionJSON{ID: 2, Amount: 1, Category: "еда"})
+			}
+		})
 	}
 }
 
@@ -92,7 +121,6 @@ func TestInvalidTransactionsLeaveHistoryAndNextIDUnchanged(t *testing.T) {
 		body string
 	}{
 		{name: "empty body", body: ""},
-		{name: "incomplete JSON", body: `{"amount":10,"category":"еда"`},
 		{name: "array root", body: `[{"amount":10,"category":"еда"}]`},
 		{name: "null root", body: `null`},
 		{name: "missing amount", body: `{"category":"еда"}`},
@@ -456,6 +484,22 @@ func decodeResponse[T any](t *testing.T, response *httptest.ResponseRecorder) T 
 		t.Fatalf("response contains trailing data: %q, error %v", response.Body.String(), err)
 	}
 	return value
+}
+
+func assertTransactionResponse(t *testing.T, response *httptest.ResponseRecorder, want transactionJSON) {
+	t.Helper()
+	if got := decodeResponse[transactionJSON](t, response); got != want {
+		t.Errorf("created transaction = %+v, want %+v", got, want)
+	}
+	fields := decodeResponse[map[string]json.RawMessage](t, response)
+	if len(fields) != 5 {
+		t.Errorf("transaction JSON fields = %v, want five public fields", fields)
+	}
+	for _, key := range []string{"id", "amount", "category", "description", "date"} {
+		if _, ok := fields[key]; !ok {
+			t.Errorf("transaction JSON is missing lowercase field %q", key)
+		}
+	}
 }
 
 func assertJSONError(t *testing.T, response *httptest.ResponseRecorder, message string) {

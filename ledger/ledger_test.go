@@ -10,8 +10,75 @@ import (
 	"testing"
 )
 
+func TestResetClearsStateAndRestartsIDs(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name      string
+		populated bool
+	}{
+		{name: "zero value"},
+		{name: "budgets and transactions", populated: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var ledger Ledger
+			t.Cleanup(ledger.Reset)
+			if tt.populated {
+				for _, budget := range []Budget{
+					{Category: "еда", Limit: 100},
+					{Category: "транспорт", Limit: 200},
+				} {
+					if err := ledger.SetBudget(budget); err != nil {
+						t.Fatal(err)
+					}
+				}
+				for _, tx := range []Transaction{
+					{Category: "еда", Amount: 60},
+					{Category: "транспорт", Amount: 80},
+				} {
+					if err := ledger.AddTransaction(tx); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+
+			ledger.Reset()
+			if got := ledger.ListTransactions(); got == nil || len(got) != 0 {
+				t.Fatalf("transactions after Reset() = %+v, want non-nil empty slice", got)
+			}
+			if got := ledger.ListBudgets(); got == nil || len(got) != 0 {
+				t.Fatalf("budgets after Reset() = %+v, want non-nil empty slice", got)
+			}
+			ledger.Reset()
+
+			if err := ledger.AddTransaction(Transaction{Category: "еда", Amount: 101}); err != nil {
+				t.Fatalf("Reset() preserved an old budget: %v", err)
+			}
+			budget := Budget{Category: "транспорт", Limit: 100}
+			if err := ledger.SetBudget(budget); err != nil {
+				t.Fatalf("SetBudget() after Reset(): %v", err)
+			}
+			if err := ledger.AddTransaction(Transaction{Category: "транспорт", Amount: 100}); err != nil {
+				t.Fatalf("Reset() preserved old expenses: %v", err)
+			}
+			want := []Transaction{
+				{ID: 1, Category: "еда", Amount: 101},
+				{ID: 2, Category: "транспорт", Amount: 100},
+			}
+			if got := ledger.ListTransactions(); !reflect.DeepEqual(got, want) {
+				t.Fatalf("history after reuse = %+v, want %+v", got, want)
+			}
+			if got := ledger.ListBudgets(); !reflect.DeepEqual(got, []Budget{budget}) {
+				t.Fatalf("budgets after reuse = %+v, want %+v", got, []Budget{budget})
+			}
+		})
+	}
+}
+
 func TestAddAndListTransactions(t *testing.T) {
+	t.Parallel()
 	var ledger Ledger
+	t.Cleanup(ledger.Reset)
 	if got := ledger.ListTransactions(); len(got) != 0 {
 		t.Fatalf("new ledger contains transactions: %+v", got)
 	}
@@ -37,6 +104,7 @@ func TestAddAndListTransactions(t *testing.T) {
 }
 
 func TestAddTransactionRejectsInvalidInputWithoutChangingHistory(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name string
 		tx   Transaction
@@ -50,7 +118,9 @@ func TestAddTransactionRejectsInvalidInputWithoutChangingHistory(t *testing.T) {
 		{name: "blank category", tx: Transaction{Category: " \t\n", Amount: 10}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			var ledger Ledger
+			t.Cleanup(ledger.Reset)
 			if err := ledger.AddTransaction(Transaction{Category: "книги", Amount: 10}); err != nil {
 				t.Fatal(err)
 			}
@@ -73,7 +143,9 @@ func TestAddTransactionRejectsInvalidInputWithoutChangingHistory(t *testing.T) {
 }
 
 func TestListTransactionsReturnsIndependentCopy(t *testing.T) {
+	t.Parallel()
 	var ledger Ledger
+	t.Cleanup(ledger.Reset)
 	tx := Transaction{Amount: 100, Category: "еда", Description: "Обед", Date: "2026-11-01"}
 	if err := ledger.AddTransaction(tx); err != nil {
 		t.Fatal(err)
@@ -86,20 +158,25 @@ func TestListTransactionsReturnsIndependentCopy(t *testing.T) {
 	}
 
 	var another Ledger
+	t.Cleanup(another.Reset)
 	if got := another.ListTransactions(); len(got) != 0 {
 		t.Fatalf("independent ledger shares history: %+v", got)
 	}
 }
 
 func TestListBudgetsStartsEmpty(t *testing.T) {
+	t.Parallel()
 	var ledger Ledger
+	t.Cleanup(ledger.Reset)
 	if got := ledger.ListBudgets(); got == nil || len(got) != 0 {
 		t.Fatalf("new ledger budgets = %+v, want non-nil empty slice", got)
 	}
 }
 
 func TestListBudgetsSortsCategoriesAndReflectsUpdates(t *testing.T) {
+	t.Parallel()
 	var ledger Ledger
+	t.Cleanup(ledger.Reset)
 	for _, budget := range []Budget{
 		{Category: "транспорт", Limit: 200},
 		{Category: "еда", Limit: 100},
@@ -127,7 +204,9 @@ func TestListBudgetsSortsCategoriesAndReflectsUpdates(t *testing.T) {
 }
 
 func TestListBudgetsReturnsIndependentCopy(t *testing.T) {
+	t.Parallel()
 	var ledger Ledger
+	t.Cleanup(ledger.Reset)
 	budget := Budget{Category: "еда", Limit: 100}
 	if err := ledger.SetBudget(budget); err != nil {
 		t.Fatal(err)
@@ -146,6 +225,7 @@ func TestListBudgetsReturnsIndependentCopy(t *testing.T) {
 }
 
 func TestAddTransactionChecksCategoryBudget(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name     string
 		limit    float64
@@ -153,18 +233,20 @@ func TestAddTransactionChecksCategoryBudget(t *testing.T) {
 		amount   float64
 		wantErr  bool
 	}{
-		{name: "below cumulative limit", limit: 100, previous: []float64{30, 40}, amount: 29},
-		{name: "equal to cumulative limit", limit: 100, previous: []float64{30, 40}, amount: 30},
+		{name: "below cumulative limit", limit: 5000, previous: []float64{1000, 2000}, amount: 1999},
+		{name: "equal to cumulative limit", limit: 5000, previous: []float64{1000, 2000}, amount: 2000},
 		{name: "equal to fractional limit", limit: 0.30, previous: []float64{0.10}, amount: 0.20},
 		{name: "equal to small fractional limit", limit: 3e-7, previous: []float64{1e-7}, amount: 2e-7},
 		{name: "above fractional limit", limit: 0.30, previous: []float64{0.10}, amount: 0.21, wantErr: true},
 		{name: "smallest representable excess", limit: 0.30, amount: math.Nextafter(0.30, math.Inf(1)), wantErr: true},
-		{name: "above cumulative limit", limit: 100, previous: []float64{30, 40}, amount: 31, wantErr: true},
+		{name: "above cumulative limit", limit: 5000, previous: []float64{1000, 2000}, amount: 2001, wantErr: true},
 		{name: "above limit without history", limit: 100, amount: 101, wantErr: true},
 		{name: "sum overflows", limit: math.MaxFloat64, previous: []float64{math.MaxFloat64}, amount: math.MaxFloat64, wantErr: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			var ledger Ledger
+			t.Cleanup(ledger.Reset)
 			if err := ledger.SetBudget(Budget{Category: "еда", Limit: tt.limit}); err != nil {
 				t.Fatal(err)
 			}
@@ -204,7 +286,9 @@ func TestAddTransactionChecksCategoryBudget(t *testing.T) {
 }
 
 func TestBudgetsAreIndependentBetweenCategoriesAndLedgers(t *testing.T) {
+	t.Parallel()
 	var ledger Ledger
+	t.Cleanup(ledger.Reset)
 	if err := ledger.SetBudget(Budget{Category: "еда", Limit: 100}); err != nil {
 		t.Fatal(err)
 	}
@@ -235,13 +319,16 @@ func TestBudgetsAreIndependentBetweenCategoriesAndLedgers(t *testing.T) {
 	}
 
 	var another Ledger
+	t.Cleanup(another.Reset)
 	if err := another.AddTransaction(Transaction{Category: "еда", Amount: 1000}); err != nil {
 		t.Fatalf("independent ledger inherited a budget: %v", err)
 	}
 }
 
 func TestSetBudgetKeepsExistingExpensesWhenSettingAndUpdating(t *testing.T) {
+	t.Parallel()
 	var ledger Ledger
+	t.Cleanup(ledger.Reset)
 	if err := ledger.AddTransaction(Transaction{Category: "еда", Amount: 60}); err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +368,9 @@ func TestSetBudgetKeepsExistingExpensesWhenSettingAndUpdating(t *testing.T) {
 }
 
 func TestLoadBudgetsAddsUpdatesAndKeepsHistory(t *testing.T) {
+	t.Parallel()
 	var ledger Ledger
+	t.Cleanup(ledger.Reset)
 	if err := ledger.SetBudget(Budget{Category: "еда", Limit: 500}); err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +416,9 @@ func TestLoadBudgetsAddsUpdatesAndKeepsHistory(t *testing.T) {
 }
 
 func TestLoadBudgetsAcceptsEmptyArrayWithoutClearingBudgets(t *testing.T) {
+	t.Parallel()
 	var ledger Ledger
+	t.Cleanup(ledger.Reset)
 	if err := ledger.SetBudget(Budget{Category: "еда", Limit: 1}); err != nil {
 		t.Fatal(err)
 	}
@@ -343,6 +434,7 @@ func TestLoadBudgetsAcceptsEmptyArrayWithoutClearingBudgets(t *testing.T) {
 }
 
 func TestLoadBudgetsRejectsInvalidInputAtomically(t *testing.T) {
+	t.Parallel()
 	readErr := errors.New("budget source unavailable")
 	for _, tt := range []struct {
 		name       string
@@ -377,7 +469,9 @@ func TestLoadBudgetsRejectsInvalidInputAtomically(t *testing.T) {
 		{name: "read error after array", reader: io.MultiReader(strings.NewReader(`[{"category":"еда","limit":5},{"category":"книги","limit":20}]`), budgetErrorReader{err: readErr}), wantCause: readErr},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			var ledger Ledger
+			t.Cleanup(ledger.Reset)
 			if err := ledger.SetBudget(Budget{Category: "еда", Limit: 100}); err != nil {
 				t.Fatal(err)
 			}

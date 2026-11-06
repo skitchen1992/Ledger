@@ -68,6 +68,11 @@ type Ledger struct {
 	budgets      map[string]Budget
 }
 
+// Reset очищает транзакции и бюджеты; ID новых транзакций снова начинаются с 1.
+func (l *Ledger) Reset() {
+	*l = Ledger{}
+}
+
 // AddTransaction проверяет расход и сохраняет его с очередным ID, начиная с 1.
 // Переданный ID заменяется; при ошибке история и следующий ID не меняются.
 func (l *Ledger) AddTransaction(tx Transaction) error {
