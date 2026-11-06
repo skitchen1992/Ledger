@@ -9,7 +9,7 @@
 | Процесс разработки, проверки и готовность результата | [rules/core/001-dev-workflow.mdc](rules/core/001-dev-workflow.mdc) |
 | Написание или изменение тестов, фикстуры и проверка отказов | [rules/core/002-testing.mdc](rules/core/002-testing.mdc) |
 | Модели, состояние, функции, публичные интерфейсы и зависимости | [rules/backend/100-architecture.mdc](rules/backend/100-architecture.mdc) |
-| Валидация, ошибки, ввод-вывод и сохранность данных | [rules/backend/104-error-handling.mdc](rules/backend/104-error-handling.mdc) |
+| Валидация, загрузка JSON, ошибки, ввод-вывод и сохранность данных | [rules/backend/104-error-handling.mdc](rules/backend/104-error-handling.mdc) |
 
 Все пути указаны относительно корня Ledger. Правила физически находятся
 в `rules/` и применяются к Go-файлам сервисов `gateway/` и `ledger/`. Читайте их по таблице,

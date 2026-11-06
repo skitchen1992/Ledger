@@ -1,35 +1,64 @@
 package main
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 )
 
 func main() {
-	if err := run(os.Stdout); err != nil {
+	if err := run("budgets.json", os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(out io.Writer) error {
+func run(budgetsPath string, out io.Writer) error {
 	ledger := Ledger{transactions: make([]Transaction, 0)}
+	file, err := os.Open(budgetsPath)
+	if err != nil {
+		return fmt.Errorf("open budgets file %q: %w", budgetsPath, err)
+	}
+	defer file.Close()
+	if err := ledger.LoadBudgets(bufio.NewReader(file)); err != nil {
+		return fmt.Errorf("load budgets from %q: %w", budgetsPath, err)
+	}
+
 	if _, err := fmt.Fprintln(out, "Ledger service started"); err != nil {
 		return fmt.Errorf("print startup message: %w", err)
 	}
 
 	for _, tx := range []Transaction{
 		{Amount: 1500, Category: "еда", Description: "Продукты", Date: "2026-11-06"},
-		{Amount: 80, Category: "транспорт", Description: "Метро", Date: "2026-11-06"},
+		{Amount: 2000, Category: "еда", Description: "Покупки на неделю", Date: "2026-11-06"},
+		{Amount: 2000, Category: "еда", Description: "Ужин", Date: "2026-11-06"},
+		{Amount: 1500, Category: "еда", Description: "Обед", Date: "2026-11-06"},
+		{Amount: 700, Category: "транспорт", Description: "Проездной", Date: "2026-11-06"},
 		{Amount: 950, Category: "книги", Description: "Учебник Go", Date: "2026-11-06"},
 	} {
 		if err := ledger.AddTransaction(tx); err != nil {
-			return fmt.Errorf("add transaction %q: %w", tx.Description, err)
+			if !errors.Is(err, ErrBudgetExceeded) {
+				return fmt.Errorf("add transaction %q: %w", tx.Description, err)
+			}
+			if _, writeErr := fmt.Fprintf(out, "Отказ: %s — %.2f руб. (%s): %v\n",
+				tx.Category, tx.Amount, tx.Description, err); writeErr != nil {
+				return fmt.Errorf("print rejected transaction: %w", writeErr)
+			}
+			continue
+		}
+		if _, err := fmt.Fprintf(out, "Добавлено: %s — %.2f руб. (%s)\n",
+			tx.Category, tx.Amount, tx.Description); err != nil {
+			return fmt.Errorf("print accepted transaction: %w", err)
 		}
 	}
 
-	for _, tx := range ledger.ListTransactions() {
+	saved := ledger.ListTransactions()
+	if _, err := fmt.Fprintf(out, "\nСохранено транзакций: %d\n", len(saved)); err != nil {
+		return fmt.Errorf("print transaction count: %w", err)
+	}
+	for _, tx := range saved {
 		if _, err := fmt.Fprintf(out, "%d | %.2f руб. | %s | %s | %s\n",
 			tx.ID, tx.Amount, tx.Category, tx.Description, tx.Date); err != nil {
 			return fmt.Errorf("print transaction %d: %w", tx.ID, err)
