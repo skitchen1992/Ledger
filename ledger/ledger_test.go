@@ -107,12 +107,13 @@ func TestAddTransactionChecksCategoryBudget(t *testing.T) {
 		{name: "smallest representable excess", limit: 0.30, amount: math.Nextafter(0.30, math.Inf(1)), wantErr: true},
 		{name: "above cumulative limit", limit: 100, previous: []float64{30, 40}, amount: 31, wantErr: true},
 		{name: "above limit without history", limit: 100, amount: 101, wantErr: true},
-		{name: "zero limit", limit: 0, amount: 1, wantErr: true},
 		{name: "sum overflows", limit: math.MaxFloat64, previous: []float64{math.MaxFloat64}, amount: math.MaxFloat64, wantErr: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var ledger Ledger
-			ledger.SetBudget(Budget{Category: "еда", Limit: tt.limit})
+			if err := ledger.SetBudget(Budget{Category: "еда", Limit: tt.limit}); err != nil {
+				t.Fatal(err)
+			}
 			for _, amount := range tt.previous {
 				if err := ledger.AddTransaction(Transaction{Category: "еда", Amount: amount}); err != nil {
 					t.Fatal(err)
@@ -150,8 +151,12 @@ func TestAddTransactionChecksCategoryBudget(t *testing.T) {
 
 func TestBudgetsAreIndependentBetweenCategoriesAndLedgers(t *testing.T) {
 	var ledger Ledger
-	ledger.SetBudget(Budget{Category: "еда", Limit: 100})
-	ledger.SetBudget(Budget{Category: "транспорт", Limit: 200})
+	if err := ledger.SetBudget(Budget{Category: "еда", Limit: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.SetBudget(Budget{Category: "транспорт", Limit: 200}); err != nil {
+		t.Fatal(err)
+	}
 	for _, tx := range []Transaction{
 		{Category: "еда", Amount: 100},
 		{Category: "транспорт", Amount: 200},
@@ -186,19 +191,27 @@ func TestSetBudgetKeepsExistingExpensesWhenSettingAndUpdating(t *testing.T) {
 	if err := ledger.AddTransaction(Transaction{Category: "еда", Amount: 60}); err != nil {
 		t.Fatal(err)
 	}
-	ledger.SetBudget(Budget{Category: "еда", Limit: 100})
+	if err := ledger.SetBudget(Budget{Category: "еда", Limit: 100}); err != nil {
+		t.Fatal(err)
+	}
 	if err := ledger.AddTransaction(Transaction{Category: "еда", Amount: 40}); err != nil {
 		t.Fatal(err)
 	}
-	ledger.SetBudget(Budget{Category: "еда", Limit: 150})
+	if err := ledger.SetBudget(Budget{Category: "еда", Limit: 150}); err != nil {
+		t.Fatal(err)
+	}
 	if err := ledger.AddTransaction(Transaction{Category: "еда", Amount: 50}); err != nil {
 		t.Fatal(err)
 	}
-	ledger.SetBudget(Budget{Category: "еда", Limit: 100})
+	if err := ledger.SetBudget(Budget{Category: "еда", Limit: 100}); err != nil {
+		t.Fatal(err)
+	}
 	if err := ledger.AddTransaction(Transaction{Category: "еда", Amount: 1}); !errors.Is(err, ErrBudgetExceeded) {
 		t.Fatalf("lowered budget: error = %v, want ErrBudgetExceeded", err)
 	}
-	ledger.SetBudget(Budget{Category: "еда", Limit: 200})
+	if err := ledger.SetBudget(Budget{Category: "еда", Limit: 200}); err != nil {
+		t.Fatal(err)
+	}
 	if err := ledger.AddTransaction(Transaction{Category: "еда", Amount: 50}); err != nil {
 		t.Fatal(err)
 	}
@@ -215,15 +228,19 @@ func TestSetBudgetKeepsExistingExpensesWhenSettingAndUpdating(t *testing.T) {
 
 func TestLoadBudgetsAddsUpdatesAndKeepsHistory(t *testing.T) {
 	var ledger Ledger
-	ledger.SetBudget(Budget{Category: "еда", Limit: 500})
-	ledger.SetBudget(Budget{Category: "подарки", Limit: 10})
+	if err := ledger.SetBudget(Budget{Category: "еда", Limit: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.SetBudget(Budget{Category: "подарки", Limit: 10}); err != nil {
+		t.Fatal(err)
+	}
 	if err := ledger.AddTransaction(Transaction{Category: "еда", Amount: 50}); err != nil {
 		t.Fatal(err)
 	}
 	input := `[
 		{"category":"еда","limit":100},
 		{"category":"транспорт","limit":200},
-		{"category":"книги","limit":0},
+		{"category":"книги","limit":20},
 		{"category":"еда","limit":150}
 	]`
 	if err := ledger.LoadBudgets(strings.NewReader(input)); err != nil {
@@ -236,6 +253,7 @@ func TestLoadBudgetsAddsUpdatesAndKeepsHistory(t *testing.T) {
 	for _, tx := range []Transaction{
 		{Category: "еда", Amount: 100},
 		{Category: "транспорт", Amount: 200},
+		{Category: "книги", Amount: 20},
 		{Category: "подарки", Amount: 10},
 	} {
 		if err := ledger.AddTransaction(tx); err != nil {
@@ -256,11 +274,13 @@ func TestLoadBudgetsAddsUpdatesAndKeepsHistory(t *testing.T) {
 
 func TestLoadBudgetsAcceptsEmptyArrayWithoutClearingBudgets(t *testing.T) {
 	var ledger Ledger
-	ledger.SetBudget(Budget{Category: "еда", Limit: 0})
+	if err := ledger.SetBudget(Budget{Category: "еда", Limit: 1}); err != nil {
+		t.Fatal(err)
+	}
 	if err := ledger.LoadBudgets(strings.NewReader(" \n [] \t\n")); err != nil {
 		t.Fatal(err)
 	}
-	if err := ledger.AddTransaction(Transaction{Category: "еда", Amount: 1}); !errors.Is(err, ErrBudgetExceeded) {
+	if err := ledger.AddTransaction(Transaction{Category: "еда", Amount: 2}); !errors.Is(err, ErrBudgetExceeded) {
 		t.Fatalf("empty array cleared an existing budget: %v", err)
 	}
 	if got := ledger.ListTransactions(); len(got) != 0 {
@@ -289,19 +309,24 @@ func TestLoadBudgetsRejectsInvalidInputAtomically(t *testing.T) {
 		{name: "blank category", reader: strings.NewReader(`[{"category":" \t\n","limit":5}]`)},
 		{name: "missing limit", reader: strings.NewReader(`[{"category":"еда"}]`)},
 		{name: "null limit", reader: strings.NewReader(`[{"category":"еда","limit":null}]`)},
+		{name: "zero limit", reader: strings.NewReader(`[{"category":"еда","limit":0}]`)},
 		{name: "negative limit", reader: strings.NewReader(`[{"category":"еда","limit":-1}]`)},
 		{name: "string limit", reader: strings.NewReader(`[{"category":"еда","limit":"5"}]`), wantType: true},
 		{name: "nonfinite limit", reader: strings.NewReader(`[{"category":"еда","limit":1e999}]`), wantType: true},
-		{name: "last entry invalid", reader: strings.NewReader(`[{"category":"еда","limit":5},{"category":"книги","limit":0},{"category":"транспорт","limit":-1}]`)},
-		{name: "extra JSON value", reader: strings.NewReader(`[{"category":"еда","limit":5},{"category":"книги","limit":0}] null`)},
-		{name: "trailing garbage", reader: strings.NewReader(`[{"category":"еда","limit":5},{"category":"книги","limit":0}] !`), wantSyntax: true},
+		{name: "last entry zero", reader: strings.NewReader(`[{"category":"еда","limit":5},{"category":"книги","limit":20},{"category":"транспорт","limit":0}]`)},
+		{name: "invalid duplicate before valid replacement", reader: strings.NewReader(`[{"category":"еда","limit":0},{"category":"еда","limit":100}]`)},
+		{name: "last entry invalid", reader: strings.NewReader(`[{"category":"еда","limit":5},{"category":"книги","limit":20},{"category":"транспорт","limit":-1}]`)},
+		{name: "extra JSON value", reader: strings.NewReader(`[{"category":"еда","limit":5},{"category":"книги","limit":20}] null`)},
+		{name: "trailing garbage", reader: strings.NewReader(`[{"category":"еда","limit":5},{"category":"книги","limit":20}] !`), wantSyntax: true},
 		{name: "source read error", reader: budgetErrorReader{err: readErr}, wantCause: readErr},
 		{name: "read error during array", reader: io.MultiReader(strings.NewReader(`[{"category":"еда","limit":`), budgetErrorReader{err: readErr}), wantCause: readErr},
-		{name: "read error after array", reader: io.MultiReader(strings.NewReader(`[{"category":"еда","limit":5},{"category":"книги","limit":0}]`), budgetErrorReader{err: readErr}), wantCause: readErr},
+		{name: "read error after array", reader: io.MultiReader(strings.NewReader(`[{"category":"еда","limit":5},{"category":"книги","limit":20}]`), budgetErrorReader{err: readErr}), wantCause: readErr},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var ledger Ledger
-			ledger.SetBudget(Budget{Category: "еда", Limit: 100})
+			if err := ledger.SetBudget(Budget{Category: "еда", Limit: 100}); err != nil {
+				t.Fatal(err)
+			}
 			if err := ledger.AddTransaction(Transaction{Category: "еда", Amount: 10}); err != nil {
 				t.Fatal(err)
 			}
@@ -334,12 +359,12 @@ func TestLoadBudgetsRejectsInvalidInputAtomically(t *testing.T) {
 			if err := ledger.AddTransaction(Transaction{Category: "еда", Amount: 1}); !errors.Is(err, ErrBudgetExceeded) {
 				t.Fatalf("loading failure cleared the existing budget: %v", err)
 			}
-			if err := ledger.AddTransaction(Transaction{Category: "книги", Amount: 1}); err != nil {
+			if err := ledger.AddTransaction(Transaction{Category: "книги", Amount: 21}); err != nil {
 				t.Fatalf("loading failure added a new budget: %v", err)
 			}
 			want = append(want,
 				Transaction{ID: 2, Category: "еда", Amount: 90},
-				Transaction{ID: 3, Category: "книги", Amount: 1},
+				Transaction{ID: 3, Category: "книги", Amount: 21},
 			)
 			if got := ledger.ListTransactions(); !reflect.DeepEqual(got, want) {
 				t.Fatalf("subsequent history = %+v, want %+v", got, want)

@@ -28,8 +28,11 @@ func TestRunBudgetDemo(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := out.String()
-	if !strings.HasPrefix(output, "Ledger service started\n") {
-		t.Errorf("missing startup message: %q", output)
+	const wantStart = "Ledger service started\n" +
+		"Проверка main.Transaction: данные корректны\n" +
+		"Проверка main.Budget: данные корректны\n"
+	if !strings.HasPrefix(output, wantStart) {
+		t.Errorf("missing startup or validation demonstration: %q", output)
 	}
 	if got := strings.Count(output, "Добавлено:"); got != 5 {
 		t.Errorf("accepted transactions = %d, want 5; output:\n%s", got, output)
@@ -59,7 +62,6 @@ func TestRunUsesLoadedBudgets(t *testing.T) {
 		rejected int
 	}{
 		{name: "lower food limit", json: `[{"category":"еда","limit":1000}]`, accepted: 2, rejected: 4},
-		{name: "zero food limit", json: `[{"category":"еда","limit":0}]`, accepted: 2, rejected: 4},
 		{name: "empty budgets", json: `[]`, accepted: 6, rejected: 0},
 		{name: "no implicit food budget", json: `[{"category":"транспорт","limit":1000}]`, accepted: 6, rejected: 0},
 	} {
@@ -100,7 +102,8 @@ func (w *failingOutput) Write(p []byte) (int, error) {
 func TestRunStopsOnOutputError(t *testing.T) {
 	writeErr := errors.New("output unavailable")
 	for _, failOn := range []string{
-		"Ledger service started", "Добавлено:", "Отказ:", "Сохранено транзакций:",
+		"Ledger service started", "Проверка main.Transaction:", "Проверка main.Budget:",
+		"Добавлено:", "Отказ:", "Сохранено транзакций:",
 		"1 |", "2 |", "3 |", "4 |", "5 |",
 	} {
 		t.Run(failOn, func(t *testing.T) {
@@ -111,6 +114,28 @@ func TestRunStopsOnOutputError(t *testing.T) {
 			}
 			if out.writesAfterFailure != 0 {
 				t.Fatalf("writes after output error = %d, want 0", out.writesAfterFailure)
+			}
+		})
+	}
+}
+
+func TestRunRejectsInvalidBudgetsBeforeDemo(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		json string
+	}{
+		{name: "zero limit", json: `[{"category":"еда","limit":0}]`},
+		{name: "negative limit", json: `[{"category":"еда","limit":-1}]`},
+		{name: "blank category", json: `[{"category":" \t","limit":100}]`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			err := run(writeBudgetFile(t, tt.json), &out)
+			if err == nil || !strings.Contains(err.Error(), "load budgets from") {
+				t.Fatalf("run() error = %v, want budget validation error with file context", err)
+			}
+			if out.Len() != 0 {
+				t.Errorf("demo ran after validation failure: %q", out.String())
 			}
 		})
 	}

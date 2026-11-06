@@ -30,6 +30,19 @@ func run(budgetsPath string, out io.Writer) error {
 		return fmt.Errorf("print startup message: %w", err)
 	}
 
+	// Демонстрационные значения проверяются через общий интерфейс и не сохраняются.
+	for _, value := range []Validatable{
+		Transaction{Amount: 100, Category: "пример", Date: "2026-11-06"},
+		Budget{Category: "пример", Limit: 100},
+	} {
+		if err := CheckValid(value); err != nil {
+			return fmt.Errorf("validate %T: %w", value, err)
+		}
+		if _, err := fmt.Fprintf(out, "Проверка %T: данные корректны\n", value); err != nil {
+			return fmt.Errorf("print validation result: %w", err)
+		}
+	}
+
 	for _, tx := range []Transaction{
 		{Amount: 1500, Category: "еда", Description: "Продукты", Date: "2026-11-06"},
 		{Amount: 2000, Category: "еда", Description: "Покупки на неделю", Date: "2026-11-06"},

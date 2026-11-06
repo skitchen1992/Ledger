@@ -11,6 +11,16 @@ import (
 	"strings"
 )
 
+// Validatable задаёт контракт проверки данных без изменения состояния и логирования.
+type Validatable interface {
+	Validate() error
+}
+
+// CheckValid проверяет данные любого типа, реализующего Validatable.
+func CheckValid(v Validatable) error {
+	return v.Validate()
+}
+
 // Transaction описывает расход. Amount задан в рублях, Date — строка YYYY-MM-DD.
 type Transaction struct {
 	ID          int
@@ -20,10 +30,32 @@ type Transaction struct {
 	Date        string
 }
 
+// Validate проверяет категорию и сумму расхода. Формат строковой Date не проверяется.
+func (tx Transaction) Validate() error {
+	if strings.TrimSpace(tx.Category) == "" {
+		return errors.New("transaction category must not be empty")
+	}
+	if tx.Amount <= 0 || math.IsNaN(tx.Amount) || math.IsInf(tx.Amount, 0) {
+		return errors.New("transaction amount must be a positive finite number")
+	}
+	return nil
+}
+
 // Budget задаёт фиксированный лимит расходов категории в рублях.
 type Budget struct {
 	Category string  `json:"category"`
 	Limit    float64 `json:"limit"`
+}
+
+// Validate проверяет непустую категорию и положительный конечный лимит.
+func (b Budget) Validate() error {
+	if strings.TrimSpace(b.Category) == "" {
+		return errors.New("budget category must not be empty")
+	}
+	if b.Limit <= 0 || math.IsNaN(b.Limit) || math.IsInf(b.Limit, 0) {
+		return errors.New("budget limit must be a positive finite number")
+	}
+	return nil
 }
 
 // ErrBudgetExceeded означает, что расход превысил бы бюджет категории.
@@ -38,11 +70,8 @@ type Ledger struct {
 // AddTransaction проверяет расход и сохраняет его с очередным ID, начиная с 1.
 // Переданный ID заменяется; при ошибке история и следующий ID не меняются.
 func (l *Ledger) AddTransaction(tx Transaction) error {
-	if strings.TrimSpace(tx.Category) == "" {
-		return errors.New("transaction category must not be empty")
-	}
-	if tx.Amount <= 0 || math.IsNaN(tx.Amount) || math.IsInf(tx.Amount, 0) {
-		return errors.New("transaction amount must be a positive finite number")
+	if err := tx.Validate(); err != nil {
+		return err
 	}
 
 	if budget, ok := l.budgets[tx.Category]; ok {
@@ -80,13 +109,16 @@ func (l *Ledger) ListTransactions() []Transaction {
 }
 
 // SetBudget добавляет или заменяет бюджет категории, сохраняя историю расходов.
-// Вызывающий код передаёт непустую категорию и конечный неотрицательный лимит.
-// Для внешних JSON-данных эти условия проверяет LoadBudgets.
-func (l *Ledger) SetBudget(b Budget) {
+// При ошибке валидации состояние не меняется.
+func (l *Ledger) SetBudget(b Budget) error {
+	if err := b.Validate(); err != nil {
+		return err
+	}
 	if l.budgets == nil {
 		l.budgets = make(map[string]Budget)
 	}
 	l.budgets[b.Category] = b
+	return nil
 }
 
 // LoadBudgets принимает один JSON-массив бюджетов и применяет его целиком.
@@ -98,7 +130,9 @@ func (l *Ledger) LoadBudgets(r io.Reader) error {
 		return err
 	}
 	for _, budget := range budgets {
-		l.SetBudget(budget)
+		if err := l.SetBudget(budget); err != nil {
+			return fmt.Errorf("set budget %q: %w", budget.Category, err)
+		}
 	}
 	return nil
 }
@@ -126,16 +160,14 @@ func readBudgets(r io.Reader) ([]Budget, error) {
 
 	budgets := make([]Budget, 0, len(input))
 	for i, item := range input {
-		if strings.TrimSpace(item.Category) == "" {
-			return nil, fmt.Errorf("budget %d: category must not be empty", i+1)
-		}
 		if item.Limit == nil {
 			return nil, fmt.Errorf("budget %d: limit is required and must not be null", i+1)
 		}
-		if *item.Limit < 0 || math.IsNaN(*item.Limit) || math.IsInf(*item.Limit, 0) {
-			return nil, fmt.Errorf("budget %d: limit must be a nonnegative finite number", i+1)
+		budget := Budget{Category: item.Category, Limit: *item.Limit}
+		if err := budget.Validate(); err != nil {
+			return nil, fmt.Errorf("budget %d: %w", i+1, err)
 		}
-		budgets = append(budgets, Budget{Category: item.Category, Limit: *item.Limit})
+		budgets = append(budgets, budget)
 	}
 	return budgets, nil
 }
