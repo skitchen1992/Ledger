@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -123,6 +124,8 @@ func TestStoreErrorsMapToHTTPStatuses(t *testing.T) {
 		status int
 		body   string
 	}{
+		{"deadline", fmt.Errorf("report: %w", context.DeadlineExceeded), http.StatusGatewayTimeout, `{"error":"request timed out or canceled"}`},
+		{"canceled", fmt.Errorf("report: %w", context.Canceled), http.StatusGatewayTimeout, `{"error":"request timed out or canceled"}`},
 		{"budget exceeded", fmt.Errorf("food: %w", ledger.ErrBudgetExceeded), http.StatusConflict, `{"error":"budget exceeded"}`},
 		{"invalid input", fmt.Errorf("%w: date must be YYYY-MM-DD", service.ErrInvalidInput), http.StatusBadRequest, ""},
 		{"database failure", errors.New("database connection password=private"), http.StatusInternalServerError, `{"error":"internal server error"}`},

@@ -44,7 +44,9 @@ func factories() []struct {
 		name string
 		new  func(context.Context) (service.Service, func(), error)
 	}{
-		{name: "Gateway", new: app.New},
+		{name: "Gateway", new: func(ctx context.Context) (service.Service, func(), error) {
+			return app.New(ctx)
+		}},
 		{name: "reporting", new: func(ctx context.Context) (service.Service, func(), error) {
 			return app.NewReporting(ctx)
 		}},

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -57,5 +58,43 @@ func TestServeReturnsListenerFailure(t *testing.T) {
 	listener.Close()
 	if err := serve(context.Background(), listener, api.NewHandler(nil)); !errors.Is(err, net.ErrClosed) {
 		t.Errorf("serve closed listener: %v, want net.ErrClosed", err)
+	}
+}
+
+func TestRequestTimeoutConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		unset       bool
+		want        time.Duration
+		wantError   bool
+	}{
+		{name: "default", unset: true, want: 2 * time.Second},
+		{name: "milliseconds", value: "50ms", want: 50 * time.Millisecond},
+		{name: "seconds", value: "3s", want: 3 * time.Second},
+		{name: "zero", value: "0s", wantError: true},
+		{name: "negative", value: "-1ms", wantError: true},
+		{name: "empty", value: "", wantError: true},
+		{name: "no unit", value: "50", wantError: true},
+		{name: "invalid", value: "invalid", wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("REQUEST_TIMEOUT", tc.value)
+			if tc.unset {
+				if err := os.Unsetenv("REQUEST_TIMEOUT"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := requestTimeoutFromEnv()
+			if (err != nil) != tc.wantError || got != tc.want {
+				t.Errorf("timeout = %s, err = %v; want %s, error=%t", got, err, tc.want, tc.wantError)
+			}
+		})
+	}
+}
+
+func TestRunRejectsInvalidTimeoutBeforeConnecting(t *testing.T) {
+	t.Setenv("REQUEST_TIMEOUT", "0s")
+	if err := run(context.Background()); err == nil || err.Error() != "REQUEST_TIMEOUT must be a positive duration, for example 2s or 50ms" {
+		t.Errorf("run with invalid request timeout = %v", err)
 	}
 }

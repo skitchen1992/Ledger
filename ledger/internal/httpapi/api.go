@@ -2,6 +2,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -178,6 +179,8 @@ func writeDecodeError(w http.ResponseWriter, r *http.Request, err error) {
 
 func writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded), r.Context().Err() != nil:
+		writeError(w, r, http.StatusGatewayTimeout, "request timed out or canceled")
 	case errors.Is(err, service.ErrBudgetExceeded):
 		writeError(w, r, http.StatusConflict, "budget exceeded")
 	case errors.Is(err, service.ErrInvalidInput):

@@ -26,6 +26,10 @@ func main() {
 }
 
 func run(ctx context.Context) error {
+	timeout, err := requestTimeoutFromEnv()
+	if err != nil {
+		return err
+	}
 	service, closeFn, err := app.New(ctx)
 	if err != nil {
 		return err
@@ -40,7 +44,24 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("listen for Gateway HTTP requests: %w", err)
 	}
 	log.Printf("Gateway HTTP listening on %s", listener.Addr())
-	return serve(ctx, listener, api.NewHandler(service))
+	handler, err := api.NewHandlerWithTimeout(service, timeout)
+	if err != nil {
+		listener.Close()
+		return err
+	}
+	return serve(ctx, listener, handler)
+}
+
+func requestTimeoutFromEnv() (time.Duration, error) {
+	value, found := os.LookupEnv("REQUEST_TIMEOUT")
+	if !found {
+		return api.DefaultRequestTimeout, nil
+	}
+	timeout, err := time.ParseDuration(value)
+	if err != nil || timeout <= 0 {
+		return 0, fmt.Errorf("REQUEST_TIMEOUT must be a positive duration, for example 2s or 50ms")
+	}
+	return timeout, nil
 }
 
 func serve(ctx context.Context, listener net.Listener, handler http.Handler) error {

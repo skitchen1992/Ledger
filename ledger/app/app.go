@@ -17,13 +17,14 @@ import (
 // New reads the database environment and returns the service used by Gateway.
 // The caller must call closeFn after a successful initialization. Migrations must
 // be applied separately before startup; the factory only checks the schema.
-func New(ctx context.Context) (service.Service, func(), error) {
+func New(ctx context.Context) (service.ReportingService, func(), error) {
 	pool, err := openDatabase(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 	repository := pg.New(pool)
-	return service.New(repository, repository, repository), func() { pool.Close() }, nil
+	base := service.New(repository, repository, repository)
+	return service.NewReporting(base, repository, nil), func() { pool.Close() }, nil
 }
 
 // NewReporting adds the Redis report cache and the standalone Ledger service's

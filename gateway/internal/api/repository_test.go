@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/skitchen1992/Ledger/ledger/domain"
 	"github.com/skitchen1992/Ledger/ledger/service"
@@ -27,7 +28,7 @@ type memoryRepository struct {
 
 func newTestHandler() http.Handler {
 	repository := newMemoryRepository()
-	return NewHandler(service.New(repository, repository, repository))
+	return NewHandler(service.NewReporting(service.New(repository, repository, repository), repository, nil))
 }
 
 func newMemoryRepository() memoryRepository {
@@ -114,4 +115,43 @@ func (r memoryRepository) SumByCategory(_ context.Context, category string) (*bi
 		}
 	}
 	return total, r.state.err
+}
+
+func (r memoryRepository) ListReportCategories(ctx context.Context, from, to string) ([]string, error) {
+	defer r.lock()()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	categories := make(map[string]bool)
+	for _, tx := range r.state.transactions {
+		if reportDateInRange(tx.Date, from, to) {
+			categories[tx.Category] = true
+		}
+	}
+	result := make([]string, 0, len(categories))
+	for category := range categories {
+		result = append(result, category)
+	}
+	sort.Strings(result)
+	return result, r.state.err
+}
+
+func (r memoryRepository) SumReportCategory(ctx context.Context, category, from, to string) (*big.Rat, error) {
+	defer r.lock()()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	total := new(big.Rat)
+	for _, tx := range r.state.transactions {
+		if tx.Category == category && reportDateInRange(tx.Date, from, to) {
+			amount, _ := new(big.Rat).SetString(strconv.FormatFloat(tx.Amount, 'g', -1, 64))
+			total.Add(total, amount)
+		}
+	}
+	return total, r.state.err
+}
+
+func reportDateInRange(value, from, to string) bool {
+	date, err := time.Parse(time.DateOnly, value)
+	return err == nil && date.Year() > 0 && date.Format(time.DateOnly) == value && value >= from && value <= to
 }

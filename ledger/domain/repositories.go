@@ -39,7 +39,9 @@ type ReportSummary struct {
 }
 
 type ReportRepository interface {
-	GetReportSummary(context.Context, string, string) (ReportSummary, error)
+	ListReportCategories(context.Context, string, string) ([]string, error)
+	// SumReportCategory returns an exact total for one category, including zero.
+	SumReportCategory(context.Context, string, string, string) (*big.Rat, error)
 }
 
 var ErrCacheMiss = errors.New("report cache miss")

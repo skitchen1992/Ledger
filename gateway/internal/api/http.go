@@ -51,6 +51,10 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, message stri
 }
 
 func writeDecodeError(w http.ResponseWriter, r *http.Request, err error) {
+	if requestCanceled(r.Context()) {
+		writeTimeoutError(w, r)
+		return
+	}
 	var syntaxError *json.SyntaxError
 	var typeError *json.UnmarshalTypeError
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||

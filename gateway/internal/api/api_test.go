@@ -263,7 +263,7 @@ func TestRepositoryFailuresReturnGeneric500AndPreserveState(t *testing.T) {
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			repository := newMemoryRepository()
-			handler := NewHandler(service.New(repository, repository, repository))
+			handler := NewHandler(service.NewReporting(service.New(repository, repository, repository), repository, nil))
 			request(t, handler, http.MethodPost, "/api/budgets", `{"category":"еда","limit":10}`, http.StatusCreated)
 			request(t, handler, http.MethodPost, "/api/transactions", `{"category":"еда","amount":4}`, http.StatusCreated)
 			repository.state.err = errors.New("database unavailable")

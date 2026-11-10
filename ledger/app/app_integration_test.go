@@ -53,6 +53,15 @@ func TestGatewayFactoryNeedsOnlyPostgresAndReturnsCloseFunction(t *testing.T) {
 	if err != nil || len(budgets) != 1 || budgets[0].Category != "factory" || budgets[0].Limit != 12 {
 		t.Fatalf("assembled service did not persist budget: budgets=%v, err=%v", budgets, err)
 	}
+	if _, err := ledgerService.CreateTransaction(context.Background(), service.Transaction{
+		Category: "factory", Amount: 4.25, Date: "2026-11-10",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	report, err := ledgerService.GetReportSummary(context.Background(), "2026-11-10", "2026-11-10")
+	if err != nil || report.Total != 4.25 || len(report.Categories) != 1 || report.Categories[0].Category != "factory" || report.Categories[0].Amount != 4.25 {
+		t.Fatalf("Gateway factory report requires only PostgreSQL: report=%+v err=%v", report, err)
+	}
 	closeFn()
 	if _, err := ledgerService.ListBudgets(context.Background()); err == nil {
 		t.Fatal("service still reads PostgreSQL after closeFn")

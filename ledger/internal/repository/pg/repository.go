@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -166,33 +167,53 @@ func (r *Repository) SumByCategory(ctx context.Context, category string) (*big.R
 	return amount, nil
 }
 
-// GetReportSummary aggregates canonical dates only; Gateway's undated or
-// free-form dated expenses still count toward budgets but have no report day.
-func (r *Repository) GetReportSummary(ctx context.Context, from, to string) (domain.ReportSummary, error) {
-	rows, err := r.queries.QueryContext(ctx, `SELECT category, SUM(amount), SUM(SUM(amount)) OVER ()
+// ListReportCategories includes only categories with expenses in the period.
+// Gateway's undated or free-form dated expenses have no report day.
+func (r *Repository) ListReportCategories(ctx context.Context, from, to string) ([]string, error) {
+	rows, err := r.queries.QueryContext(ctx, `SELECT DISTINCT category
 		FROM expenses
 		WHERE CASE WHEN date ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' AND pg_input_is_valid(date, 'date')
-			THEN date::date BETWEEN $1::date AND $2::date ELSE FALSE END
-		GROUP BY category ORDER BY category`, from, to)
+			THEN date::date BETWEEN $1::date AND $2::date ELSE FALSE END`, from, to)
 	if err != nil {
-		return domain.ReportSummary{}, fmt.Errorf("query report summary: %w", err)
+		return nil, fmt.Errorf("list report categories: %w", err)
 	}
 	defer rows.Close()
-	report := domain.ReportSummary{From: from, To: to, Categories: make([]domain.CategoryTotal, 0)}
+	categories := make([]string, 0)
 	for rows.Next() {
-		var category domain.CategoryTotal
-		if err := rows.Scan(&category.Category, &category.Amount, &report.Total); err != nil {
-			return domain.ReportSummary{}, fmt.Errorf("read report summary: %w", err)
+		var category string
+		if err := rows.Scan(&category); err != nil {
+			return nil, fmt.Errorf("read report category: %w", err)
 		}
-		if category.Category, err = decodeText(category.Category); err != nil {
-			return domain.ReportSummary{}, fmt.Errorf("read report category: %w", err)
+		if category, err = decodeText(category); err != nil {
+			return nil, fmt.Errorf("decode report category: %w", err)
 		}
-		report.Categories = append(report.Categories, category)
+		categories = append(categories, category)
 	}
 	if err := rows.Err(); err != nil {
-		return domain.ReportSummary{}, fmt.Errorf("iterate report summary: %w", err)
+		return nil, fmt.Errorf("iterate report categories: %w", err)
 	}
-	return report, nil
+	// Sort decoded values to keep the order independent of PostgreSQL collation
+	// and of the escaping used to store NUL and backslash characters.
+	sort.Strings(categories)
+	return categories, nil
+}
+
+// SumReportCategory preserves decimal precision while aggregating a category.
+func (r *Repository) SumReportCategory(ctx context.Context, category, from, to string) (*big.Rat, error) {
+	var total string
+	if err := r.queries.QueryRowContext(ctx, `SELECT COALESCE(SUM(amount), 0)::text
+		FROM expenses
+		WHERE category = $1 AND CASE
+			WHEN date ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' AND pg_input_is_valid(date, 'date')
+			THEN date::date BETWEEN $2::date AND $3::date ELSE FALSE END`, encodeText(category), from, to).
+		Scan(&total); err != nil {
+		return nil, fmt.Errorf("sum report category: %w", err)
+	}
+	amount, ok := new(big.Rat).SetString(total)
+	if !ok {
+		return nil, fmt.Errorf("sum report category: invalid decimal %q", total)
+	}
+	return amount, nil
 }
 
 // PostgreSQL TEXT cannot contain NUL. Escaping it and backslashes preserves all
