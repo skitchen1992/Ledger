@@ -2,3 +2,4 @@
 /ledger/cover.html
 /.env
 /bin/
+.DS_Store

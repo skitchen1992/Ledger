@@ -6,8 +6,8 @@ alwaysApply: false
 
 # Обработка ошибок Gateway и Ledger
 
-Основа — `backend/rules/backend/104-error-handling.mdc` проекта ДокПоток.
-Правила адаптированы к Go, PostgreSQL и Redis проекта Ledger.
+Правила действуют для обработки ошибок и внешних данных в Gateway и Ledger,
+включая операции с PostgreSQL и Redis.
 
 ## Ошибки как часть контракта
 

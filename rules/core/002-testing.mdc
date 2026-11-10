@@ -6,8 +6,8 @@ alwaysApply: false
 
 # Тестирование Gateway и Ledger
 
-Основа — `backend/rules/core/002-testing.mdc` проекта ДокПоток.
-Правила адаптированы к Go, PostgreSQL и Redis проекта Ledger.
+Правила действуют для модульных и интеграционных тестов Gateway и Ledger,
+включая проверки PostgreSQL и Redis.
 
 ## Наблюдаемое поведение
 
