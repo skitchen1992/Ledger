@@ -18,6 +18,27 @@ HTTP-сервис Ledger на порту 8081 использует ту же Б�
 и предоставляет отчёты с Redis-кэшем. `GET /api/reports/summary` на порту 8080
 возвращает суммы по категориям без обращения к Redis.
 
+## Docker
+
+`Dockerfile` двухэтапный: `golang:1.24-alpine` собирает статический бинарь
+(`CGO_ENABLED=0`, `-ldflags="-s -w"`), `alpine:3.22` запускает его на порту 8080.
+Модуль Ledger подключён через `replace => ../ledger`, поэтому сборка требует
+именованного контекста `ledger`. Из корня репозитория:
+
+```sh
+docker build --build-context ledger=./ledger -t gateway ./gateway
+docker compose up -d --wait db
+export DATABASE_URL='postgres://postgres:postgres@localhost:5432/cashapp?sslmode=disable'
+goose -dir ./ledger/migrations postgres "$DATABASE_URL" up
+docker compose up -d --build --wait gateway
+curl -i http://localhost:8080/ping
+```
+
+В Compose сервис `gateway` получает `DATABASE_URL` с хостом `db`, ждёт `healthy`
+у базы и сам проверяется healthcheck-ом `wget -qO- http://localhost:8080/ping`.
+Переменные, проверки эндпоинтов и остановка описаны
+в [общем README](../README.md#docker-и-docker-compose).
+
 ## Подготовка БД
 
 Команды из корня репозитория:
@@ -25,7 +46,7 @@ HTTP-сервис Ledger на порту 8081 использует ту же Б�
 ```sh
 go install github.com/pressly/goose/v3/cmd/goose@v3.21.1
 export PATH="$(go env GOPATH)/bin:$PATH"
-docker compose up -d --wait
+docker compose up -d --wait db
 export DATABASE_URL='postgres://postgres:postgres@localhost:5432/cashapp?sslmode=disable'
 goose -dir ./ledger/migrations postgres "$DATABASE_URL" up
 ```

@@ -24,7 +24,8 @@ DSN и предоставляет отчёты с Redis-кэшем на 30 се�
 - `ledger/budgets.json` — пример для прежнего `LoadBudgets`, при старте не загружается.
 - `gateway/` — HTTP API с внедрённым `service.ReportingService`, пакетным импортом
   и таймаутами запросов.
-- `compose.yaml` — локальные PostgreSQL и Redis с отдельными томами данных.
+- `gateway/Dockerfile`, `ledger/Dockerfile` — двухэтапная сборка образов сервисов.
+- `docker-compose.yml` — PostgreSQL (`db`), Gateway и Redis с отдельными томами данных.
 
 Модули `gateway/` и `ledger/` имеют собственные `go.mod`; корневого модуля нет.
 Поэтому `domain`, `service` и `app` доступны как публичные пакеты: соседний модуль
@@ -40,8 +41,174 @@ PostgreSQL-репозитории их реализуют, фабрика сое
 контекстом; при ошибке Gateway логирует причину и завершает процесс.
 Подробности сервисов: [Ledger](ledger/README.md), [Gateway](gateway/README.md).
 
+## Docker и Docker Compose
+
+Gateway собирается в Docker-образ и запускается в Docker Compose вместе
+с PostgreSQL. Ledger работает внутри процесса Gateway как Go-модуль; у него есть
+собственный образ, но отдельным контейнером в Compose он пока не запускается.
+
+Оба Dockerfile двухэтапные. Этап `builder` (`golang:1.24-alpine`) копирует
+`go.mod`/`go.sum`, выполняет `go mod download`, затем копирует исходники и собирает
+статический бинарь `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w"`.
+Этап `runner` (`alpine:3.22`) содержит только бинарь и запускает его
+от непривилегированного пользователя `app`. Версии базовых образов меняются
+аргументами сборки `GO_VERSION` и `ALPINE_VERSION`.
+
+`gateway/go.mod` подключает Ledger через `replace … => ../ledger`, а этот путь
+лежит вне контекста `./gateway`. Поэтому сборке Gateway передаётся второй,
+именованный контекст `ledger`: в `docker-compose.yml` — через
+`build.additional_contexts`, при ручной сборке — флагом `--build-context`.
+
+Сервисы `docker-compose.yml` (проект `ledger`, сеть `ledger_default`):
+
+| Сервис | Образ | Порт на хосте | Назначение |
+| --- | --- | --- | --- |
+| `db` | `postgres:17-alpine` | `127.0.0.1:5432` | PostgreSQL, том `postgres_data`, healthcheck `pg_isready` |
+| `gateway` | сборка из `./gateway` | `8080` | Gateway, healthcheck `wget -qO- http://localhost:8080/ping` |
+| `redis` | `redis:7-alpine` | `127.0.0.1:6379` | Redis для отдельного Ledger на хосте; Gateway его не использует |
+
+Внутри сети Compose контейнеры обращаются друг к другу по именам сервисов:
+Gateway подключается к базе по хосту `db` и порту `5432`. `depends_on`
+с `condition: service_healthy` создаёт Gateway только после того, как `db`
+станет `healthy`.
+
+### Переменные окружения
+
+Compose подставляет значения из окружения shell или из файла `.env` в корне
+репозитория (он не хранится в git); без них действуют значения по умолчанию.
+
+| Переменная | По умолчанию | Назначение |
+| --- | --- | --- |
+| `DB_USER` | `postgres` | `POSTGRES_USER` в `db` и пользователь в `DATABASE_URL` Gateway |
+| `DB_PASS` | `postgres` | `POSTGRES_PASSWORD` в `db` и пароль в `DATABASE_URL` Gateway |
+| `DB_NAME` | `cashapp` | `POSTGRES_DB` в `db` и база в `DATABASE_URL` Gateway |
+| `DB_PORT` | `5432` | Порт PostgreSQL на хосте `127.0.0.1` для Goose и запуска через `go run` |
+| `REDIS_PORT` | `6379` | Порт Redis на хосте `127.0.0.1` |
+| `REQUEST_TIMEOUT` | `2s` | Таймаут запросов Gateway в контейнере |
+
+Контейнер `gateway` получает от Compose
+`DATABASE_URL=postgres://postgres:postgres@db:5432/cashapp?sslmode=disable`
+(с подстановкой `DB_*`) и `REQUEST_TIMEOUT`, а слушает `:8080` — значение
+`GATEWAY_ADDR` по умолчанию. Goose на хосте работает с той же базой через
+проброшенный порт: `postgres://postgres:postgres@localhost:5432/cashapp?sslmode=disable`.
+`DB_USER`, `DB_PASS`, `DB_NAME` инициализируют PostgreSQL только при создании
+пустого тома. Они подставляются в URL без кодирования, поэтому не используйте
+в них `@`, `:`, `/`, `?`, `#` и `%`.
+
+### Сборка образов
+
+```sh
+docker compose build gateway
+docker build --build-context ledger=./ledger -t gateway ./gateway
+docker build -t ledger ./ledger
+```
+
+Первая команда собирает образ `ledger-gateway` для Compose, вторая — тот же
+Dockerfile вручную, третья — образ отдельного Ledger (порт `8081`).
+
+### Запуск
+
+Команды выполняются из корня репозитория.
+
+1. Запустите PostgreSQL и дождитесь статуса `healthy`:
+
+   ```sh
+   docker compose up -d --wait db
+   docker compose ps db
+   ```
+
+   `--wait` возвращает управление после успешного `pg_isready`;
+   в колонке `STATUS` видно `(healthy)`.
+
+2. Примените миграции Goose с хоста через проброшенный порт:
+
+   ```sh
+   go install github.com/pressly/goose/v3/cmd/goose@v3.21.1
+   export PATH="$(go env GOPATH)/bin:$PATH"
+   export DATABASE_URL='postgres://postgres:postgres@localhost:5432/cashapp?sslmode=disable'
+   goose -dir ./ledger/migrations postgres "$DATABASE_URL" up
+   goose -dir ./ledger/migrations postgres "$DATABASE_URL" status
+   ```
+
+   Это та же база, к которой Gateway подключается внутри сети по хосту `db`.
+   При заданном `DB_PORT` укажите его вместо `5432`. Без миграций Gateway
+   при старте сообщает, что их нужно применить, и завершается.
+
+3. Соберите и запустите Gateway:
+
+   ```sh
+   docker compose up -d --build --wait gateway
+   docker compose ps
+   ```
+
+   `--wait` дожидается успешного healthcheck: у `gateway` в `docker compose ps`
+   статус `(healthy)`. Лог — `docker compose logs -f gateway`. Если Gateway
+   запускался до миграций и завершился, после шага 2 повторите эту команду.
+
+4. Проверьте эндпоинты снаружи и изнутри контейнера — команды ниже.
+
+Образ можно проверить и без Compose-сервиса `gateway`: при старте он подключается
+к PostgreSQL, поэтому после шагов 1–2 подключите контейнер к сети Compose.
+Порт 8080 должен быть свободен:
+
+```sh
+docker compose stop gateway
+docker run --rm -d --name gateway-check --network ledger_default -p 8080:8080 \
+  -e DATABASE_URL='postgres://postgres:postgres@db:5432/cashapp?sslmode=disable' gateway
+curl -i http://localhost:8080/ping
+docker stop gateway-check
+```
+
+Ожидается `200` и `"pong"`.
+
+### Проверка эндпоинтов
+
+С хоста:
+
+```sh
+curl -i http://localhost:8080/ping
+curl -i -X POST http://localhost:8080/api/budgets \
+  -H 'Content-Type: application/json' -d '{"category":"docker-еда","limit":500}'
+curl -i http://localhost:8080/api/budgets
+curl -i -X POST http://localhost:8080/api/transactions \
+  -H 'Content-Type: application/json' \
+  -d '{"amount":450,"category":"docker-еда","description":"ланч","date":"2026-11-06"}'
+curl -i http://localhost:8080/api/transactions
+curl -i -X POST 'http://localhost:8080/api/transactions/bulk?workers=2' \
+  -H 'Content-Type: application/json' \
+  -d '[{"amount":30,"category":"docker-еда","date":"2026-11-07"},{"amount":0,"category":"docker-еда"}]'
+curl -i 'http://localhost:8080/api/reports/summary?from=2026-11-01&to=2026-11-30'
+```
+
+Для новой категории ожидаются: `200` и `"pong"`; `201`; `200` со списком
+бюджетов, включая `docker-еда`; `201` с назначенным `id`; `200` со списком
+транзакций; `200` и
+`{"accepted":1,"rejected":1,"errors":[{"index":1,"error":"transaction amount must be a positive finite number"}]}`;
+`200` со сводкой, где `"docker-еда":480`. Данные хранятся в томе, поэтому
+для повторной проверки выберите другую категорию.
+
+Изнутри контейнеров:
+
+```sh
+docker compose exec gateway wget -qO- http://localhost:8080/ping
+docker compose exec db psql -U postgres -d cashapp -c 'TABLE budgets; TABLE expenses;'
+```
+
+### Остановка
+
+```sh
+docker compose stop
+docker compose down
+docker compose down -v
+```
+
+`stop` останавливает контейнеры, `docker compose start` запускает их снова.
+`down` удаляет контейнеры и сеть, данные PostgreSQL остаются в томе `postgres_data`.
+`down -v` удаляет и тома: перед следующим запуском снова выполните шаги 1–3.
+
 ## PostgreSQL, Redis и миграции
 
+Этот раздел описывает запуск Gateway и Ledger на хосте через `go run`.
 Нужны Go, Docker с Compose и утилита Goose. Все команды этого раздела выполняются
 из корня репозитория. Установите закреплённую версию Goose:
 
@@ -50,10 +217,10 @@ go install github.com/pressly/goose/v3/cmd/goose@v3.21.1
 export PATH="$(go env GOPATH)/bin:$PATH"
 ```
 
-Запустите PostgreSQL 17 и Redis 7:
+Запустите PostgreSQL 17 и Redis 7 (без контейнера Gateway):
 
 ```sh
-docker compose up -d --wait
+docker compose up -d --wait db redis
 export DATABASE_URL='postgres://postgres:postgres@localhost:5432/cashapp?sslmode=disable'
 export REDIS_ADDR='localhost:6379'
 export REDIS_DB='0'
@@ -150,6 +317,8 @@ go run .
 Оба процесса работают до `Ctrl+C`, завершают HTTP-запросы и освобождают ресурсы
 через полученную функцию `closeFn`. Gateway передаёт инициализацию БД фабрике
 Ledger; отдельный процесс Ledger и Redis для работы Gateway не нужны.
+Контейнер `gateway` из Compose тоже занимает порт 8080: перед `go run .`
+остановите его командой `docker compose stop gateway` или задайте `GATEWAY_ADDR`.
 
 ## Таймауты запросов
 
@@ -355,7 +524,7 @@ curl -i -X POST http://localhost:8081/api/transactions \
 ```sh
 curl -i http://localhost:8081/api/budgets
 curl -i http://localhost:8081/api/transactions
-docker compose exec postgres psql -U postgres -d cashapp -c 'TABLE budgets; TABLE expenses;'
+docker compose exec db psql -U postgres -d cashapp -c 'TABLE budgets; TABLE expenses;'
 ```
 
 Бюджеты отсортированы по категории, расходы — по `date DESC, id DESC`.

@@ -7,7 +7,7 @@ alwaysApply: false
 # Миграции PostgreSQL Ledger
 
 Миграции схемы приложения находятся в `ledger/migrations/`. Используйте SQL
-и Goose v3.21.1, закреплённый в README. Целевая БД в `compose.yaml` — PostgreSQL 17.
+и Goose v3.21.1, закреплённый в README. Целевая БД — сервис `db` в `docker-compose.yml`, PostgreSQL 17.
 Сохраняйте последовательные имена `00001_budgets.sql`, `00002_expenses.sql`
 и далее; каждый файл содержит секции `-- +goose Up` и `-- +goose Down`.
 

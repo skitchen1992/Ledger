@@ -46,7 +46,7 @@ PostgreSQL. Gateway после успеха выполняет `defer closeFn()`
 ```sh
 go install github.com/pressly/goose/v3/cmd/goose@v3.21.1
 export PATH="$(go env GOPATH)/bin:$PATH"
-docker compose up -d --wait
+docker compose up -d --wait db redis
 export DATABASE_URL='postgres://postgres:postgres@localhost:5432/cashapp?sslmode=disable'
 export REDIS_ADDR='localhost:6379'
 export REDIS_DB='0'
@@ -86,6 +86,19 @@ goose -dir ./ledger/migrations postgres "$DATABASE_URL" down
 Откат миграции 3 отказывается менять схему, если значение нельзя вернуть
 в `NUMERIC(14,2)` или `DATE` без потери данных, либо текст содержит NUL. `down-to 0` откатывает все три
 миграции и удаляет таблицы и данные; перед следующим запуском повторите `up`.
+
+## Docker-образ
+
+`Dockerfile` двухэтапный: `golang:1.24-alpine` собирает статический бинарь
+`./cmd/ledger` (`CGO_ENABLED=0`, `-ldflags="-s -w"`), `alpine:3.22` запускает его
+на порту 8081. Сборка из корня репозитория:
+
+```sh
+docker build -t ledger ./ledger
+```
+
+В `docker-compose.yml` контейнер Ledger пока не запускается: Gateway использует
+Ledger как Go-модуль внутри своего процесса.
 
 ## HTTP-проверка
 
