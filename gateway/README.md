@@ -77,6 +77,25 @@ curl -i http://localhost:8080/api/transactions
 и валидации возвращают `400`, неизвестные пути — `404`, неподдерживаемые методы —
 `405`. Ошибки имеют вид `{"error":"описание"}`.
 
+## Пакетный импорт
+
+`POST /api/transactions/bulk` принимает JSON-массив транзакций в формате одиночного
+POST и возвращает `200` со сводкой, даже если часть элементов отклонена:
+
+```sh
+curl -i -X POST 'http://localhost:8080/api/transactions/bulk?workers=2' \
+  -H 'Content-Type: application/json' \
+  -d '[{"amount":40,"category":"еда"},{"amount":0,"category":"еда"}]'
+```
+
+Ответ: `{"accepted":1,"rejected":1,"errors":[{"index":1,"error":"transaction amount must be a positive finite number"}]}`.
+`workers` — целое от 1 до 32, по умолчанию 4. Ошибка JSON в любом элементе
+или неверный `workers` дают `400` без записи; таймаут или отмена — `504`
+и `{"error":"request timed out or canceled"}`, при этом элементы, сохранённые
+до отмены, остаются в БД. Обработчик только разбирает HTTP-запрос и преобразует
+сводку в JSON; пул воркеров, валидация и проверка бюджета находятся в Ledger.
+Формат, конвейер и примеры описаны в [общем README](../README.md#пакетный-импорт-транзакций).
+
 ## Отчёт и таймауты запросов
 
 ```sh

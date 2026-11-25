@@ -24,6 +24,7 @@ type Service interface {
 	SetBudget(context.Context, Budget) error
 	ListBudgets(context.Context) ([]Budget, error)
 	CreateTransaction(context.Context, Transaction) (Transaction, error)
+	ImportTransactions(context.Context, []Transaction, int) (ImportSummary, error)
 	ListTransactions(context.Context) ([]Transaction, error)
 }
 

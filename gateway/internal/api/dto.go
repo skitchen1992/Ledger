@@ -19,6 +19,19 @@ type TransactionResponse struct {
 	Date        string  `json:"date"`
 }
 
+// BulkImportResponse — сводка POST /api/transactions/bulk; errors упорядочены по index.
+type BulkImportResponse struct {
+	Accepted int64             `json:"accepted"`
+	Rejected int64             `json:"rejected"`
+	Errors   []BulkImportError `json:"errors"`
+}
+
+// BulkImportError связывает отклонённый элемент входного массива с причиной.
+type BulkImportError struct {
+	Index int    `json:"index"`
+	Error string `json:"error"`
+}
+
 // CreateBudgetRequest используется для создания и обновления лимита категории.
 type CreateBudgetRequest struct {
 	Category string  `json:"category"`

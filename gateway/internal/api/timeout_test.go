@@ -62,6 +62,7 @@ func TestAllAPIOperationsStopAtRequestTimeout(t *testing.T) {
 		{http.MethodGet, "/api/transactions", ""},
 		{http.MethodPost, "/api/budgets", `{"category":"еда","limit":100}`},
 		{http.MethodPost, "/api/transactions", `{"category":"еда","amount":1}`},
+		{http.MethodPost, "/api/transactions/bulk?workers=2", `[{"category":"еда","amount":1},{"category":"книги","amount":1},{"category":"еда","amount":2}]`},
 		{http.MethodGet, "/api/reports/summary?from=2026-11-01&to=2026-11-10", ""},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
